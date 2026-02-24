@@ -94,7 +94,7 @@ func plainDijkstra(g *graph.Graph, source, target uint32) uint32 {
 }
 
 // chDijkstra runs bidirectional CH Dijkstra on the overlay.
-func chDijkstra(ch *CHResult, source, target uint32) uint32 {
+func chDijkstra(ch *graph.CHGraph, source, target uint32) uint32 {
 	distFwd := make([]uint32, ch.NumNodes)
 	distBwd := make([]uint32, ch.NumNodes)
 	for i := range distFwd {
