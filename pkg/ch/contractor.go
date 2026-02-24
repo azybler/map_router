@@ -14,37 +14,11 @@ type adjEntry struct {
 	middle int32 // -1 for original edges, else the contracted node ID
 }
 
-// CHResult holds the output of contraction hierarchies preprocessing.
-type CHResult struct {
-	// Node data from original graph.
-	NumNodes uint32
-	NodeLat  []float64
-	NodeLon  []float64
-	Rank     []uint32
-
-	// Forward upward graph (edges where rank[source] < rank[target]).
-	FwdFirstOut []uint32
-	FwdHead     []uint32
-	FwdWeight   []uint32
-	FwdMiddle   []int32
-
-	// Backward upward graph (reversed edges where rank[source] < rank[target]).
-	BwdFirstOut []uint32
-	BwdHead     []uint32
-	BwdWeight   []uint32
-	BwdMiddle   []int32
-
-	// Original edge geometry (carried through from the base graph).
-	GeoFirstOut []uint32
-	GeoShapeLat []float64
-	GeoShapeLon []float64
-}
-
 // Contract performs Contraction Hierarchies preprocessing on the given graph.
-func Contract(g *graph.Graph) *CHResult {
+func Contract(g *graph.Graph) *graph.CHGraph {
 	n := g.NumNodes
 	if n == 0 {
-		return &CHResult{}
+		return &graph.CHGraph{}
 	}
 
 	// Build mutable forward and reverse adjacency lists from the CSR graph.
@@ -227,7 +201,7 @@ func computePriority(outAdj, inAdj [][]adjEntry, node uint32, contracted []bool,
 
 // buildOverlay creates forward and backward upward CSR graphs from the
 // contracted adjacency lists and node ranks.
-func buildOverlay(orig *graph.Graph, outAdj, inAdj [][]adjEntry, rank []uint32) *CHResult {
+func buildOverlay(orig *graph.Graph, outAdj, inAdj [][]adjEntry, rank []uint32) *graph.CHGraph {
 	n := orig.NumNodes
 
 	// Collect forward upward edges: edge u→v where rank[u] < rank[v].
@@ -288,7 +262,7 @@ func buildOverlay(orig *graph.Graph, outAdj, inAdj [][]adjEntry, rank []uint32) 
 	fwdFirstOut, fwdHead, fwdWeight, fwdMiddle := buildCSR(fwdEdges)
 	bwdFirstOut, bwdHead, bwdWeight, bwdMiddle := buildCSR(bwdEdges)
 
-	return &CHResult{
+	return &graph.CHGraph{
 		NumNodes:    n,
 		NodeLat:     orig.NodeLat,
 		NodeLon:     orig.NodeLon,

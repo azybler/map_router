@@ -1,5 +1,30 @@
 package graph
 
+// CHGraph holds the output of contraction hierarchies preprocessing.
+type CHGraph struct {
+	NumNodes uint32
+	NodeLat  []float64
+	NodeLon  []float64
+	Rank     []uint32
+
+	// Forward upward graph (edges where rank[source] < rank[target]).
+	FwdFirstOut []uint32
+	FwdHead     []uint32
+	FwdWeight   []uint32
+	FwdMiddle   []int32
+
+	// Backward upward graph (reversed edges where rank[source] < rank[target]).
+	BwdFirstOut []uint32
+	BwdHead     []uint32
+	BwdWeight   []uint32
+	BwdMiddle   []int32
+
+	// Original edge geometry (carried through from the base graph).
+	GeoFirstOut []uint32
+	GeoShapeLat []float64
+	GeoShapeLon []float64
+}
+
 // Graph represents a directed graph in CSR (Compressed Sparse Row) format.
 type Graph struct {
 	NumNodes uint32
