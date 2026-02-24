@@ -4,7 +4,6 @@ import (
 	"container/heap"
 	"log"
 	"map_router/pkg/graph"
-	"math"
 )
 
 // adjEntry represents an edge in the mutable adjacency list.
@@ -51,10 +50,16 @@ func Contract(g *graph.Graph) *graph.CHGraph {
 	}
 	heap.Init(&pq)
 
+	// Pre-allocate reusable witness search state.
+	ws := newWitnessState(n)
+
 	log.Printf("Starting contraction of %d nodes...", n)
 
 	var totalShortcuts int
 	order := uint32(0)
+
+	// Adaptive log interval: frequent near the end.
+	logInterval := uint32(50000)
 
 	for pq.Len() > 0 {
 		// Pop minimum-priority node.
@@ -78,8 +83,8 @@ func Contract(g *graph.Graph) *graph.CHGraph {
 		rank[node] = order
 		order++
 
-		// Find shortcuts needed.
-		shortcuts := findShortcuts(outAdj, inAdj, node, contracted)
+		// Find shortcuts needed using batch witness search.
+		shortcuts := findShortcuts(ws, outAdj, inAdj, node, contracted)
 		totalShortcuts += len(shortcuts)
 
 		// Add shortcuts to adjacency lists.
@@ -106,7 +111,19 @@ func Contract(g *graph.Graph) *graph.CHGraph {
 			}
 		}
 
-		if order%50000 == 0 {
+		// Adaptive logging: more frequent as we approach the end.
+		remaining := n - order
+		if remaining < 1000 {
+			logInterval = 100
+		} else if remaining < 10000 {
+			logInterval = 1000
+		} else if remaining < 100000 {
+			logInterval = 10000
+		} else {
+			logInterval = 50000
+		}
+
+		if order%logInterval == 0 {
 			log.Printf("Contracted %d/%d nodes, %d shortcuts so far", order, n, totalShortcuts)
 		}
 	}
@@ -124,7 +141,10 @@ type shortcut struct {
 }
 
 // findShortcuts determines which shortcuts are needed when contracting a node.
-func findShortcuts(outAdj, inAdj [][]adjEntry, node uint32, contracted []bool) []shortcut {
+// Uses batch witness search: one Dijkstra per incoming neighbor instead of one
+// per (incoming, outgoing) pair. This reduces search count from O(|in|*|out|)
+// to O(|in|).
+func findShortcuts(ws *witnessState, outAdj, inAdj [][]adjEntry, node uint32, contracted []bool) []shortcut {
 	// Collect active incoming and outgoing neighbors.
 	var incoming []adjEntry
 	for _, e := range inAdj[node] {
@@ -140,16 +160,28 @@ func findShortcuts(outAdj, inAdj [][]adjEntry, node uint32, contracted []bool) [
 		}
 	}
 
+	if len(incoming) == 0 || len(outgoing) == 0 {
+		return nil
+	}
+
 	var shortcuts []shortcut
 
 	for _, in := range incoming {
-		// Find max outgoing weight for upper bound.
+		// Find max outgoing weight for upper bound of this batch search.
 		var maxOut uint32
 		for _, out := range outgoing {
 			if out.to != in.to && out.weight > maxOut {
 				maxOut = out.weight
 			}
 		}
+		if maxOut == 0 {
+			continue // all outgoing go back to in.to
+		}
+
+		maxWeight := in.weight + maxOut
+
+		// Run ONE Dijkstra from in.to, then check all outgoing targets.
+		batchWitnessSearch(ws, outAdj, in.to, node, maxWeight, contracted)
 
 		for _, out := range outgoing {
 			if out.to == in.to {
@@ -157,12 +189,10 @@ func findShortcuts(outAdj, inAdj [][]adjEntry, node uint32, contracted []bool) [
 			}
 
 			scWeight := in.weight + out.weight
-			if scWeight > math.MaxUint32 {
-				continue
-			}
 
-			// Check if witness path exists.
-			if !witnessSearch(outAdj, in.to, out.to, node, scWeight, contracted) {
+			// Check if witness path exists: dist[out.to] <= scWeight means
+			// there's an alternative path at least as good as the shortcut.
+			if ws.dist[out.to] > scWeight {
 				shortcuts = append(shortcuts, shortcut{
 					from:   in.to,
 					to:     out.to,
