@@ -150,6 +150,39 @@ func TestMinHeap(t *testing.T) {
 	}
 }
 
+func BenchmarkCHDijkstra(b *testing.B) {
+	result := &osmparser.ParseResult{
+		Edges: []osmparser.RawEdge{
+			{FromNodeID: 10, ToNodeID: 20, Weight: 100},
+			{FromNodeID: 20, ToNodeID: 10, Weight: 100},
+			{FromNodeID: 20, ToNodeID: 30, Weight: 200},
+			{FromNodeID: 30, ToNodeID: 20, Weight: 200},
+			{FromNodeID: 10, ToNodeID: 40, Weight: 300},
+			{FromNodeID: 40, ToNodeID: 10, Weight: 300},
+			{FromNodeID: 30, ToNodeID: 60, Weight: 400},
+			{FromNodeID: 60, ToNodeID: 30, Weight: 400},
+			{FromNodeID: 40, ToNodeID: 50, Weight: 500},
+			{FromNodeID: 50, ToNodeID: 40, Weight: 500},
+			{FromNodeID: 50, ToNodeID: 60, Weight: 600},
+			{FromNodeID: 60, ToNodeID: 50, Weight: 600},
+		},
+		NodeLat: map[osm.NodeID]float64{10: 1.300, 20: 1.300, 30: 1.300, 40: 1.301, 50: 1.301, 60: 1.301},
+		NodeLon: map[osm.NodeID]float64{10: 103.800, 20: 103.801, 30: 103.802, 40: 103.800, 50: 103.801, 60: 103.802},
+	}
+	g := graph.Build(result)
+	chg := ch.Contract(g)
+	eng := NewEngine(chg, g)
+
+	ctx := context.Background()
+	start := LatLng{Lat: 1.300, Lng: 103.800}
+	end := LatLng{Lat: 1.301, Lng: 103.802}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = eng.Route(ctx, start, end)
+	}
+}
+
 func TestRouteEndToEnd(t *testing.T) {
 	g, chg := buildTestGraphAndCH(t)
 	eng := NewEngine(chg, g)

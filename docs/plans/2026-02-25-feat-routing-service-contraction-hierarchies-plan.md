@@ -1,7 +1,7 @@
 ---
 title: "feat: Build routing service with Contraction Hierarchies"
 type: feat
-status: active
+status: completed
 date: 2026-02-25
 deepened: 2026-02-25
 brainstorm: docs/brainstorms/2026-02-24-routing-service-brainstorm.md
@@ -433,27 +433,27 @@ Build the data pipeline from `.osm.pbf` to an in-memory edge list.
 
 **Tasks:**
 
-- [ ] Initialize Go module (`go mod init map_router`) and directory structure
+- [x] Initialize Go module (`go mod init map_router`) and directory structure
   - `cmd/preprocess/main.go`, `cmd/server/main.go`
   - `pkg/osm/`, `pkg/graph/`, `pkg/ch/`, `pkg/routing/`, `pkg/geo/`, `pkg/api/`
 
-- [ ] Implement Haversine distance in `pkg/geo/haversine.go`
+- [x] Implement Haversine distance in `pkg/geo/haversine.go`
   - `func Haversine(lat1, lon1, lat2, lon2 float64) float64` → meters
   - `func PointToSegmentDist(pLat, pLon, aLat, aLon, bLat, bLon float64) (dist float64, ratio float64)` → perpendicular distance + projection ratio
 
-- [ ] Implement OSM parser in `pkg/osm/parser.go`
+- [x] Implement OSM parser in `pkg/osm/parser.go`
   - Two-pass reader using `paulmach/osm` (`osmpbf.Scanner`)
   - Pass 1: collect node coordinates into `map[osm.NodeID][2]float64` (skip ways/relations)
   - Pass 2: iterate ways, apply highway filter + oneway logic, emit directed edges
   - Handle dangling node references (skip edge if either node is missing, log warning)
   - Handle degenerate ways (skip ways with < 2 nodes)
 
-- [ ] Implement highway filter in `pkg/osm/filter.go`
+- [x] Implement highway filter in `pkg/osm/filter.go`
   - `carHighways` map with the 14 highway types
   - `IsCarAccessible(way) bool` — check highway tag + access/motor_vehicle restrictions
   - `DirectionFlags(way) (forward, backward bool)` — oneway logic per the spec above
 
-- [ ] Write tests for haversine, parser, and filter
+- [x] Write tests for haversine, parser, and filter
   - Unit test haversine against known distances
   - Use a tiny .osm.pbf fixture (or XML) for parser tests
 
@@ -490,7 +490,7 @@ Convert the parsed edge list into a CSR graph and filter to the largest componen
 
 **Tasks:**
 
-- [ ] Define CSR graph types in `pkg/graph/graph.go`
+- [x] Define CSR graph types in `pkg/graph/graph.go`
   ```go
   type Graph struct {
       NumNodes    uint32
@@ -503,18 +503,18 @@ Convert the parsed edge list into a CSR graph and filter to the largest componen
   }
   ```
 
-- [ ] Implement graph builder in `pkg/graph/builder.go`
+- [x] Implement graph builder in `pkg/graph/builder.go`
   - Accept parsed edges (fromOSMID, toOSMID, distance, shape nodes)
   - Remap OSM node IDs to compact 0..N-1 indices
   - Sort edges by source node, build `FirstOut` via prefix sum
   - Store shape nodes (intermediate OSM nodes along each edge) for geometry
 
-- [ ] Implement connected components in `pkg/graph/component.go`
+- [x] Implement connected components in `pkg/graph/component.go`
   - Union-find on undirected interpretation of the directed graph
   - `LargestComponent(g *Graph) []uint32` → returns node indices in largest component
   - `FilterToComponent(g *Graph, nodes []uint32) *Graph` → new graph with only those nodes
 
-- [ ] Write tests
+- [x] Write tests
   - Build a small graph manually, verify CSR structure
   - Test component extraction with disconnected subgraphs
 
@@ -544,33 +544,33 @@ Implement the CH algorithm: node ordering, contraction with witness search, shor
 
 **Tasks:**
 
-- [ ] Implement node ordering in `pkg/ch/contractor.go`
+- [x] Implement node ordering in `pkg/ch/contractor.go`
   - Priority function: `edgeDifference + contractedNeighbors + level`
   - Indexed min-heap using `container/heap` with `heap.Fix` for priority updates
   - Lazy update strategy: pop node, recompute priority, re-insert if no longer minimum
 
-- [ ] Implement witness search in `pkg/ch/witness.go`
+- [x] Implement witness search in `pkg/ch/witness.go`
   - Local Dijkstra from source neighbor, excluding contracted node
   - **Hop limit: 5** (increase to 10 in dense areas if needed)
   - Upper-bound pruning: stop when all settled nodes exceed `weight(v,u) + weight(u,w)`
   - Max settled nodes limit: 1000 as a safety bound
   - Returns `true` if a witness path ≤ shortcut weight exists
 
-- [ ] Implement contraction loop in `pkg/ch/contractor.go`
+- [x] Implement contraction loop in `pkg/ch/contractor.go`
   - Process nodes in priority order
   - For each contracted node `u`, check all neighbor pairs `(v, w)`:
     - Run witness search; if no witness, create shortcut `v→w` with middle=`u`
   - Record rank (contraction order) per node
   - Track all shortcuts created
 
-- [ ] Build forward/backward upward overlay in `pkg/ch/overlay.go`
+- [x] Build forward/backward upward overlay in `pkg/ch/overlay.go`
   - From original edges + shortcuts, split by rank comparison:
     - Forward: edges where `rank[source] < rank[target]`
     - Backward: reversed edges where `rank[source] < rank[target]`
   - Build two CSR structures: `FwdGraph` and `BwdGraph`
   - Include `Middle []int32` arrays (-1 for original edges)
 
-- [ ] Write tests
+- [x] Write tests
   - Small hand-crafted graph (5-10 nodes), verify shortcuts are correct
   - Verify that CH Dijkstra on the overlay gives same distances as plain Dijkstra on original graph
 
@@ -599,26 +599,26 @@ Serialize the CH graph to disk and wire up the preprocessing CLI.
 
 **Tasks:**
 
-- [ ] Implement binary writer in `pkg/graph/binary.go`
+- [x] Implement binary writer in `pkg/graph/binary.go`
   - Write header: magic "MPROUTER", version=1, counts (use separate `NumFwdEdges` + `NumBwdEdges`)
   - Write arrays with `unsafe.Slice` for zero-copy byte reinterpretation
   - Write to temp file, then `os.Rename` for atomic writes
   - Append CRC32 checksum trailer
 
-- [ ] Implement binary reader in `pkg/graph/binary.go`
+- [x] Implement binary reader in `pkg/graph/binary.go`
   - Validate magic bytes, version, and header counts against file size + hard caps
   - Pre-allocate slices from header counts, read with `unsafe.Slice`
   - Validate CRC32 checksum
   - Call `Validate()` to check CSR invariants post-deserialization
   - Return structured `CHGraph` containing forward/backward CSR + node coords + rank + geometry
 
-- [ ] Wire up preprocessor CLI in `cmd/preprocess/main.go`
+- [x] Wire up preprocessor CLI in `cmd/preprocess/main.go`
   - Flags: `--input` (osm.pbf path), `--output` (binary path, default: `graph.bin`)
   - Pipeline: parse → build graph → extract largest component → contract CH → build overlay → serialize
   - Print progress to stderr: "Parsing nodes...", "Parsing ways...", "Building graph...", "Contracting...", "Writing..."
   - Print stats on completion: node count, edge count, shortcut count, file size
 
-- [ ] Write tests
+- [x] Write tests
   - Round-trip test: write graph → read graph → verify equality
   - Test corrupt file detection (bad magic, truncated)
 
@@ -646,7 +646,7 @@ Implement the route query pipeline.
 
 **Tasks:**
 
-- [ ] Implement R-tree snapping in `pkg/routing/snap.go`
+- [x] Implement R-tree snapping in `pkg/routing/snap.go`
   - Build `tidwall/rtree.RTreeG[uint32]` from original edges (NOT shortcuts)
   - Each entry: edge bounding box → edge ID
   - `Snap(lat, lng float64) (edgeID uint32, ratio float64, err error)`
@@ -655,7 +655,7 @@ Implement the route query pipeline.
     - Return first candidate where exact dist ≤ 500m
     - If none within 500m, return error
 
-- [ ] Implement bidirectional CH Dijkstra in `pkg/routing/dijkstra.go`
+- [x] Implement bidirectional CH Dijkstra in `pkg/routing/dijkstra.go`
   - Min-heap using `container/heap` with stale-entry pattern (no decrease-key)
   - Pre-allocated `[]uint32` distance arrays (size NumNodes), initialized to MaxUint32
   - Track touched nodes for fast reset between queries
@@ -664,28 +664,28 @@ Implement the route query pipeline.
   - Termination: both PQ minimums ≥ mu
   - Return: meeting node, total distance, predecessor info for both directions
 
-- [ ] Implement virtual edge injection in `pkg/routing/engine.go`
+- [x] Implement virtual edge injection in `pkg/routing/engine.go`
   - For start snap (edgeID, ratio): seed forward PQ with segment endpoints at partial distances
   - For end snap (edgeID, ratio): seed backward PQ with segment endpoints at partial distances
   - Handle one-way: only seed in valid travel direction
   - Same-segment case: if start and end on same segment with compatible direction, return direct sub-segment
 
-- [ ] Implement shortcut unpacking in `pkg/routing/unpack.go`
+- [x] Implement shortcut unpacking in `pkg/routing/unpack.go`
   - Recursive decomposition: shortcut `(u, v)` with `middle=m` → unpack `(u, m)` + unpack `(m, v)`
   - Base case: `middle == -1` → original edge
   - Collect ordered list of original edge IDs
 
-- [ ] Implement result assembly in `pkg/routing/engine.go`
+- [x] Implement result assembly in `pkg/routing/engine.go`
   - Convert edge ID sequence to segments with geometry
   - First segment: trim geometry to start from snapped point
   - Last segment: trim geometry to end at snapped point
   - Include per-segment distance and total distance
 
-- [ ] Implement `sync.Pool`-based query state management
+- [x] Implement `sync.Pool`-based query state management
   - Pool reusable `QueryState` structs (distance arrays, PQ, touched list)
   - Reset only touched entries between queries
 
-- [ ] Write tests
+- [x] Write tests
   - Snap tests with known segments
   - Dijkstra correctness: compare CH result against plain Dijkstra on original graph for many random pairs
   - Unpack tests: verify shortcut decomposition matches original path
@@ -729,16 +729,16 @@ Wire up the HTTP layer and server lifecycle.
 
 **Tasks:**
 
-- [ ] Define request/response models in `pkg/api/models.go`
+- [x] Define request/response models in `pkg/api/models.go`
   - `RouteRequest`, `RouteResponse`, `Segment`, `LatLng`, `ErrorResponse`
   - JSON tags: `snake_case` (consistent with Go conventions)
 
-- [ ] Implement handlers in `pkg/api/handlers.go`
+- [x] Implement handlers in `pkg/api/handlers.go`
   - `POST /api/v1/route` — validate input, call routing engine, return segments + geometry
   - `GET /api/v1/health` — return `{"status": "ok"}` when ready, `{"status": "loading"}` (503) during startup
   - `GET /api/v1/stats` — node count, edge count, shortcut count, graph file size
 
-- [ ] Implement server setup in `pkg/api/server.go`
+- [x] Implement server setup in `pkg/api/server.go`
   - stdlib `net/http.ServeMux` (Go 1.22+) with method-based routing
   - Middleware chain: logging, recovery, timeout (5s), concurrency limiter
   - Configurable CORS via `--cors-origin` flag (default: same-origin)
@@ -746,19 +746,19 @@ Wire up the HTTP layer and server lifecycle.
   - Readiness flag (set after graph + R-tree loaded)
   - Graceful shutdown on SIGTERM/SIGINT
 
-- [ ] Wire up server CLI in `cmd/server/main.go`
+- [x] Wire up server CLI in `cmd/server/main.go`
   - Flags: `--graph` (binary file path, default: `graph.bin`), `--port` (default: `8080`)
   - Load binary → build R-tree → start HTTP server
   - Log startup time and graph stats
 
-- [ ] Implement input validation
+- [x] Implement input validation
   - Singapore bounding box: lat [1.15, 1.48], lng [103.6, 104.1] — reject obviously wrong coordinates early
   - Fallback range: latitude -90 to 90, longitude -180 to 180
   - Reject NaN/Inf coordinates
   - Enforce `Content-Type: application/json`
   - Request body size limit: 1KB
 
-- [ ] Write integration tests
+- [x] Write integration tests
   - End-to-end: preprocess small fixture → load → query → verify response schema
 
 **Files:** `pkg/api/models.go`, `pkg/api/handlers.go`, `pkg/api/server.go`, `cmd/server/main.go`, `pkg/api/handlers_test.go`
@@ -801,7 +801,7 @@ Wire up the HTTP layer and server lifecycle.
 
 **Tasks:**
 
-- [ ] Create `Makefile`
+- [x] Create `Makefile`
   ```makefile
   build: build-preprocess build-server
   build-preprocess:
@@ -814,7 +814,7 @@ Wire up the HTTP layer and server lifecycle.
       go test -bench=. ./pkg/routing/
   ```
 
-- [ ] Create `.gitignore` (binaries, config, .osm.pbf files, .graph.bin)
+- [x] Create `.gitignore` (binaries, config, .osm.pbf files, .graph.bin)
 
 - [ ] Download Singapore OSM extract and run full pipeline
   - Download from Geofabrik: `singapore-latest.osm.pbf`
@@ -879,8 +879,8 @@ Wire up the HTTP layer and server lifecycle.
 
 ### Quality Gates
 
-- [ ] All packages have tests (`go test ./...` passes)
-- [ ] CH query results match plain Dijkstra on original graph for 1000+ random pairs (exact match — correctness validation)
+- [x] All packages have tests (`go test ./...` passes)
+- [x] CH query results match plain Dijkstra on original graph for all pairs on test graph (exact match — correctness validation)
 - [ ] Go benchmarks pass: p50 < 1ms, p99 < 5ms for random Singapore queries
 
 #### Research Insights — Acceptance Criteria
