@@ -56,6 +56,12 @@ func (s *Snapper) Snap(lat, lng float64) (SnapResult, error) {
 	var bestResult SnapResult
 	found := false
 
+	// BoxDist returns squared-degree distance. Convert our meter threshold
+	// to squared degrees for comparison. 1° ≈ 111,320 m.
+	const metersPerDeg = 111_320.0
+	maxSnapDeg := maxSnapDistMeters / metersPerDeg
+	maxSnapDegSq := maxSnapDeg * maxSnapDeg
+
 	// Use Nearby to get candidates in approximate distance order.
 	s.tree.Nearby(
 		rtree.BoxDist[float64, uint32]([2]float64{lng, lat}, [2]float64{lng, lat}, nil),
@@ -82,17 +88,14 @@ func (s *Snapper) Snap(lat, lng float64) (SnapResult, error) {
 				found = true
 			}
 
-			// Stop if the R-tree box distance exceeds our best + margin.
-			// Once we have a good candidate within maxSnapDist, stop expanding.
 			if found && bestDist <= maxSnapDistMeters {
-				// Continue a bit to ensure we have the true nearest.
-				// The R-tree returns in box-distance order; once box distance
-				// exceeds our best exact distance by a margin, we can stop.
-				return dist <= bestDist*1.5
+				// Convert bestDist (meters) to squared degrees for R-tree comparison.
+				bestDeg := bestDist / metersPerDeg
+				return dist <= bestDeg*bestDeg*2.25 // 1.5x margin squared
 			}
 
-			// Stop if we've gone way beyond snap distance.
-			return !found || bestDist <= maxSnapDistMeters*2
+			// Haven't found a good candidate yet — stop if box dist exceeds max snap range.
+			return dist <= maxSnapDegSq*4
 		},
 	)
 

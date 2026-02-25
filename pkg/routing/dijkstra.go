@@ -78,6 +78,8 @@ func (h *MinHeap) siftDown(i int) {
 type QueryState struct {
 	DistFwd []uint32
 	DistBwd []uint32
+	PredFwd []uint32 // predecessor in forward search (noNode = no predecessor)
+	PredBwd []uint32 // predecessor in backward search (noNode = no predecessor)
 	Touched []uint32 // nodes touched during this query (for fast reset)
 	FwdPQ   MinHeap
 	BwdPQ   MinHeap
@@ -87,13 +89,19 @@ type QueryState struct {
 func NewQueryState(n uint32) *QueryState {
 	distFwd := make([]uint32, n)
 	distBwd := make([]uint32, n)
+	predFwd := make([]uint32, n)
+	predBwd := make([]uint32, n)
 	for i := range distFwd {
 		distFwd[i] = math.MaxUint32
 		distBwd[i] = math.MaxUint32
+		predFwd[i] = noNode
+		predBwd[i] = noNode
 	}
 	return &QueryState{
 		DistFwd: distFwd,
 		DistBwd: distBwd,
+		PredFwd: predFwd,
+		PredBwd: predBwd,
 		Touched: make([]uint32, 0, 1024),
 		FwdPQ:   MinHeap{items: make([]PQItem, 0, 256)},
 		BwdPQ:   MinHeap{items: make([]PQItem, 0, 256)},
@@ -105,6 +113,8 @@ func (qs *QueryState) Reset() {
 	for _, node := range qs.Touched {
 		qs.DistFwd[node] = math.MaxUint32
 		qs.DistBwd[node] = math.MaxUint32
+		qs.PredFwd[node] = noNode
+		qs.PredBwd[node] = noNode
 	}
 	qs.Touched = qs.Touched[:0]
 	qs.FwdPQ.Reset()

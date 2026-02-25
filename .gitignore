@@ -14,7 +14,7 @@ go.work
 go.work.sum
 
 # Output files
-*.graph.bin
+*.bin
 
 # OSM data
 *.osm.pbf

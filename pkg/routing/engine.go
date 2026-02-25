@@ -3,7 +3,10 @@ package routing
 import (
 	"context"
 	"errors"
+	"log"
 	"math"
+	"sync"
+	"time"
 
 	"map_router/pkg/geo"
 	"map_router/pkg/graph"
@@ -40,19 +43,26 @@ type Engine struct {
 	chg       *graph.CHGraph
 	origGraph *graph.Graph // for geometry and snap
 	snapper   *Snapper
+	qsPool    sync.Pool
 }
 
 // NewEngine creates a routing engine from a CH graph and the original graph.
 func NewEngine(chg *graph.CHGraph, origGraph *graph.Graph) *Engine {
-	return &Engine{
+	e := &Engine{
 		chg:       chg,
 		origGraph: origGraph,
 		snapper:   NewSnapper(origGraph),
 	}
+	e.qsPool.New = func() any {
+		return NewQueryState(chg.NumNodes)
+	}
+	return e
 }
 
 // Route computes the shortest path between two points.
 func (e *Engine) Route(ctx context.Context, start, end LatLng) (*RouteResult, error) {
+	t0 := time.Now()
+
 	// Step 1: Snap points to nearest road segments.
 	startSnap, err := e.snapper.Snap(start.Lat, start.Lng)
 	if err != nil {
@@ -63,33 +73,47 @@ func (e *Engine) Route(ctx context.Context, start, end LatLng) (*RouteResult, er
 		return nil, err
 	}
 
-	// Step 2: Run bidirectional CH Dijkstra with predecessor tracking.
-	qs := NewQueryState(e.chg.NumNodes)
-	defer qs.Reset()
+	t1 := time.Now()
 
-	fwdPred := make(map[uint32]uint32)
-	bwdPred := make(map[uint32]uint32)
+	// Step 2: Run bidirectional CH Dijkstra with predecessor tracking.
+	qs := e.qsPool.Get().(*QueryState)
+	defer func() {
+		qs.Reset()
+		e.qsPool.Put(qs)
+	}()
 
 	// Seed forward PQ with start snap's endpoints.
 	seedForward(qs, e.origGraph, startSnap)
 	// Seed backward PQ with end snap's endpoints.
 	seedBackward(qs, e.origGraph, endSnap)
 
-	mu, meetNode := e.runCHDijkstra(ctx, qs, fwdPred, bwdPred)
+	mu, meetNode := e.runCHDijkstra(ctx, qs)
+
+	t2 := time.Now()
 
 	if meetNode == noNode || mu == math.MaxUint32 {
 		return nil, ErrNoRoute
 	}
 
 	// Step 3: Reconstruct overlay node path.
-	overlayNodes := e.reconstructOverlayPath(meetNode, fwdPred, bwdPred)
+	overlayNodes := e.reconstructOverlayPath(meetNode, qs.PredFwd, qs.PredBwd)
+
+	t3 := time.Now()
 
 	// Step 4: Unpack shortcuts into original node sequence.
 	origNodes := unpackOverlayPath(e.chg, overlayNodes)
 
+	t4 := time.Now()
+
 	// Step 5: Build geometry from original node sequence.
 	totalDistMeters := float64(mu) / 1000.0
 	geometry := e.buildGeometry(origNodes)
+
+	t5 := time.Now()
+
+	log.Printf("[route-timing] snap=%v dijkstra=%v reconstruct=%v unpack=%v geometry=%v | overlay=%d orig=%d geom=%d",
+		t1.Sub(t0), t2.Sub(t1), t3.Sub(t2), t4.Sub(t3), t5.Sub(t4),
+		len(overlayNodes), len(origNodes), len(geometry))
 
 	result := &RouteResult{
 		TotalDistanceMeters: totalDistMeters,
@@ -106,14 +130,14 @@ func (e *Engine) Route(ctx context.Context, start, end LatLng) (*RouteResult, er
 
 // reconstructOverlayPath builds the full overlay node path from
 // source seed → meetNode → target seed.
-func (e *Engine) reconstructOverlayPath(meetNode uint32, fwdPred, bwdPred map[uint32]uint32) []uint32 {
+func (e *Engine) reconstructOverlayPath(meetNode uint32, predFwd, predBwd []uint32) []uint32 {
 	// Forward path: meetNode ← ... ← source seed (trace backwards, then reverse).
 	var fwdPath []uint32
 	node := meetNode
 	for {
 		fwdPath = append(fwdPath, node)
-		pred, ok := fwdPred[node]
-		if !ok {
+		pred := predFwd[node]
+		if pred == noNode {
 			break
 		}
 		node = pred
@@ -124,11 +148,11 @@ func (e *Engine) reconstructOverlayPath(meetNode uint32, fwdPred, bwdPred map[ui
 	}
 
 	// Backward path: meetNode → ... → target seed.
-	// bwdPred[v] = u means original direction v → u (toward target).
+	// predBwd[v] = u means original direction v → u (toward target).
 	node = meetNode
 	for {
-		pred, ok := bwdPred[node]
-		if !ok {
+		pred := predBwd[node]
+		if pred == noNode {
 			break
 		}
 		fwdPath = append(fwdPath, pred)
@@ -220,7 +244,7 @@ func seedBackward(qs *QueryState, g *graph.Graph, snap SnapResult) {
 }
 
 // runCHDijkstra runs bidirectional CH Dijkstra with predecessor tracking.
-func (e *Engine) runCHDijkstra(ctx context.Context, qs *QueryState, fwdPred, bwdPred map[uint32]uint32) (uint32, uint32) {
+func (e *Engine) runCHDijkstra(ctx context.Context, qs *QueryState) (uint32, uint32) {
 	mu := uint32(math.MaxUint32)
 	meetNode := noNode
 
@@ -263,7 +287,7 @@ func (e *Engine) runCHDijkstra(ctx context.Context, qs *QueryState, fwdPred, bwd
 				if newDist < qs.DistFwd[v] {
 					qs.touchFwd(v, newDist)
 					qs.FwdPQ.Push(v, newDist)
-					fwdPred[v] = u
+					qs.PredFwd[v] = u
 				}
 			}
 		}
@@ -297,7 +321,7 @@ func (e *Engine) runCHDijkstra(ctx context.Context, qs *QueryState, fwdPred, bwd
 				if newDist < qs.DistBwd[v] {
 					qs.touchBwd(v, newDist)
 					qs.BwdPQ.Push(v, newDist)
-					bwdPred[v] = u
+					qs.PredBwd[v] = u
 				}
 			}
 		}

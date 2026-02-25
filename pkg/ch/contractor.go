@@ -6,6 +6,10 @@ import (
 	"map_router/pkg/graph"
 )
 
+// maxShortcutsPerNode is the limit on shortcuts a single contraction can create.
+// Nodes exceeding this form an uncontracted "core" at the top of the hierarchy.
+const maxShortcutsPerNode = 1000
+
 // adjEntry represents an edge in the mutable adjacency list.
 type adjEntry struct {
 	to     uint32
@@ -78,13 +82,22 @@ func Contract(g *graph.Graph) *graph.CHGraph {
 			continue
 		}
 
+		// Find shortcuts needed using batch witness search.
+		shortcuts := findShortcuts(ws, outAdj, inAdj, node, contracted)
+
+		// If contracting this node would produce too many shortcuts,
+		// stop contraction entirely. Remaining nodes form a "core"
+		// at the top of the hierarchy with original edges preserved.
+		if len(shortcuts) > maxShortcutsPerNode {
+			log.Printf("Stopping contraction: node %d would create %d shortcuts (limit %d). %d nodes remain in core.",
+				node, len(shortcuts), maxShortcutsPerNode, n-order)
+			break
+		}
+
 		// Contract this node.
 		contracted[node] = true
 		rank[node] = order
 		order++
-
-		// Find shortcuts needed using batch witness search.
-		shortcuts := findShortcuts(ws, outAdj, inAdj, node, contracted)
 		totalShortcuts += len(shortcuts)
 
 		// Add shortcuts to adjacency lists.
@@ -128,7 +141,19 @@ func Contract(g *graph.Graph) *graph.CHGraph {
 		}
 	}
 
-	log.Printf("Contraction complete: %d shortcuts created (%.1fx original edges)", totalShortcuts, float64(totalShortcuts)/float64(g.NumEdges))
+	// Assign ranks to remaining uncontracted core nodes.
+	coreSize := uint32(0)
+	for i := uint32(0); i < n; i++ {
+		if !contracted[i] {
+			contracted[i] = true
+			rank[i] = order
+			order++
+			coreSize++
+		}
+	}
+
+	log.Printf("Contraction complete: %d shortcuts created (%.1fx original edges), %d core nodes",
+		totalShortcuts, float64(totalShortcuts)/float64(g.NumEdges), coreSize)
 
 	// Build forward and backward upward CSR overlay.
 	return buildOverlay(g, outAdj, inAdj, rank)
