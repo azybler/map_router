@@ -29,14 +29,13 @@ func main() {
 	log.Printf("Loaded: %d nodes, %d fwd edges, %d bwd edges",
 		chg.NumNodes, len(chg.FwdHead), len(chg.BwdHead))
 
-	// Build original graph for snapping (we need node coords and edge geometry).
-	// The CHGraph carries the original graph's geometry and coords.
+	// Reconstruct original graph for snapping (R-tree needs real road edges).
 	origGraph := &graph.Graph{
 		NumNodes:    chg.NumNodes,
-		NumEdges:    uint32(len(chg.FwdHead)), // approximate, used for snapping
-		FirstOut:    chg.FwdFirstOut,
-		Head:        chg.FwdHead,
-		Weight:      chg.FwdWeight,
+		NumEdges:    uint32(len(chg.OrigHead)),
+		FirstOut:    chg.OrigFirstOut,
+		Head:        chg.OrigHead,
+		Weight:      chg.OrigWeight,
 		NodeLat:     chg.NodeLat,
 		NodeLon:     chg.NodeLon,
 		GeoFirstOut: chg.GeoFirstOut,

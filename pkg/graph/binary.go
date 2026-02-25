@@ -12,19 +12,18 @@ import (
 )
 
 const (
-	magicBytes   = "MPROUTER"
-	version      = uint32(1)
-	headerSize   = 32
-	maxNodes     = 10_000_000
-	maxEdges     = 50_000_000
+	magicBytes = "MPROUTER"
+	version    = uint32(2) // v2: added original graph edges for snapping
+	maxNodes   = 10_000_000
+	maxEdges   = 50_000_000
 )
 
-// fileHeader is the 32-byte binary header.
+// fileHeader is the binary header.
 type fileHeader struct {
 	Magic        [8]byte
 	Version      uint32
 	NumNodes     uint32
-	NumOrigEdges uint32
+	NumOrigEdges uint32 // original graph edge count (for snapping R-tree)
 	NumShortcuts uint32
 	NumFwdEdges  uint32
 	NumBwdEdges  uint32
@@ -48,8 +47,9 @@ func WriteBinary(path string, chg *CHGraph) error {
 
 	numFwdEdges := uint32(len(chg.FwdHead))
 	numBwdEdges := uint32(len(chg.BwdHead))
+	numOrigEdges := uint32(len(chg.OrigHead))
 
-	// Count original vs shortcut edges.
+	// Count shortcut edges in overlay.
 	var numShortcuts uint32
 	for _, m := range chg.FwdMiddle {
 		if m >= 0 {
@@ -61,7 +61,6 @@ func WriteBinary(path string, chg *CHGraph) error {
 			numShortcuts++
 		}
 	}
-	numOrigEdges := numFwdEdges + numBwdEdges - numShortcuts
 
 	// Write header.
 	hdr := fileHeader{
@@ -114,6 +113,17 @@ func WriteBinary(path string, chg *CHGraph) error {
 	}
 	if err := writeInt32Slice(w, chg.BwdMiddle); err != nil {
 		return fmt.Errorf("write BwdMiddle: %w", err)
+	}
+
+	// Original graph edges (for snapping R-tree).
+	if err := writeUint32Slice(w, chg.OrigFirstOut); err != nil {
+		return fmt.Errorf("write OrigFirstOut: %w", err)
+	}
+	if err := writeUint32Slice(w, chg.OrigHead); err != nil {
+		return fmt.Errorf("write OrigHead: %w", err)
+	}
+	if err := writeUint32Slice(w, chg.OrigWeight); err != nil {
+		return fmt.Errorf("write OrigWeight: %w", err)
 	}
 
 	// Geometry (length-prefixed for variable-size arrays).
@@ -216,13 +226,18 @@ func ReadBinary(path string) (*CHGraph, error) {
 		return nil, fmt.Errorf("read BwdMiddle: %w", err)
 	}
 
-	// Geometry — read remaining data.
-	// GeoFirstOut length depends on original edge count (we don't know exact count,
-	// so read what's available until EOF or CRC).
-	// For simplicity, store geometry array sizes: we know GeoFirstOut has orig edges + 1 entries.
-	// But since we don't have numOrigEdgesInOverlay as a separate count, we'll detect from remaining data.
-	// Actually, geometry comes from the original graph, not the overlay.
-	// For now, read as optional (may be empty for small test graphs).
+	// Original graph edges (for snapping R-tree).
+	if result.OrigFirstOut, err = readUint32Slice(r, int(hdr.NumNodes+1)); err != nil {
+		return nil, fmt.Errorf("read OrigFirstOut: %w", err)
+	}
+	if result.OrigHead, err = readUint32Slice(r, int(hdr.NumOrigEdges)); err != nil {
+		return nil, fmt.Errorf("read OrigHead: %w", err)
+	}
+	if result.OrigWeight, err = readUint32Slice(r, int(hdr.NumOrigEdges)); err != nil {
+		return nil, fmt.Errorf("read OrigWeight: %w", err)
+	}
+
+	// Geometry (length-prefixed, optional for small test graphs).
 	result.GeoFirstOut, _ = readUint32SliceOptional(r)
 	result.GeoShapeLat, _ = readFloat64SliceOptional(r)
 	result.GeoShapeLon, _ = readFloat64SliceOptional(r)

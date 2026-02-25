@@ -19,6 +19,11 @@ type CHGraph struct {
 	BwdWeight   []uint32
 	BwdMiddle   []int32
 
+	// Original graph edges (needed for R-tree snapping and geometry).
+	OrigFirstOut []uint32
+	OrigHead     []uint32
+	OrigWeight   []uint32
+
 	// Original edge geometry (carried through from the base graph).
 	GeoFirstOut []uint32
 	GeoShapeLat []float64
