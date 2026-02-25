@@ -110,7 +110,9 @@ func TestCHDijkstraCorrectness(t *testing.T) {
 			qs.BwdPQ.Push(d, 0)
 
 			eng := &Engine{chg: chg}
-			mu, _ := eng.runCHDijkstra(context.Background(), qs)
+			fwdPred := make(map[uint32]uint32)
+			bwdPred := make(map[uint32]uint32)
+			mu, _ := eng.runCHDijkstra(context.Background(), qs, fwdPred, bwdPred)
 
 			if mu != expected {
 				t.Errorf("s=%d d=%d: CH=%d, Dijkstra=%d", s, d, mu, expected)

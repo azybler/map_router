@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math"
 
+	"map_router/pkg/geo"
 	"map_router/pkg/graph"
 )
 
@@ -36,17 +37,17 @@ type Router interface {
 
 // Engine implements Router using a CH graph.
 type Engine struct {
-	chg      *graph.CHGraph
+	chg       *graph.CHGraph
 	origGraph *graph.Graph // for geometry and snap
-	snapper  *Snapper
+	snapper   *Snapper
 }
 
 // NewEngine creates a routing engine from a CH graph and the original graph.
 func NewEngine(chg *graph.CHGraph, origGraph *graph.Graph) *Engine {
 	return &Engine{
-		chg:      chg,
+		chg:       chg,
 		origGraph: origGraph,
-		snapper:  NewSnapper(origGraph),
+		snapper:   NewSnapper(origGraph),
 	}
 }
 
@@ -62,41 +63,118 @@ func (e *Engine) Route(ctx context.Context, start, end LatLng) (*RouteResult, er
 		return nil, err
 	}
 
-	// Step 2: Run bidirectional CH Dijkstra.
+	// Step 2: Run bidirectional CH Dijkstra with predecessor tracking.
 	qs := NewQueryState(e.chg.NumNodes)
 	defer qs.Reset()
+
+	fwdPred := make(map[uint32]uint32)
+	bwdPred := make(map[uint32]uint32)
 
 	// Seed forward PQ with start snap's endpoints.
 	seedForward(qs, e.origGraph, startSnap)
 	// Seed backward PQ with end snap's endpoints.
 	seedBackward(qs, e.origGraph, endSnap)
 
-	mu, meetNode := e.runCHDijkstra(ctx, qs)
+	mu, meetNode := e.runCHDijkstra(ctx, qs, fwdPred, bwdPred)
 
 	if meetNode == noNode || mu == math.MaxUint32 {
 		return nil, ErrNoRoute
 	}
 
-	// Step 3: Compute total distance in meters (from millimeters).
-	totalDistMeters := float64(mu) / 1000.0
+	// Step 3: Reconstruct overlay node path.
+	overlayNodes := e.reconstructOverlayPath(meetNode, fwdPred, bwdPred)
 
-	// For now, return a simplified result with total distance.
-	// Full segment unpacking with geometry will be added when the
-	// original graph's geometry is properly wired through.
+	// Step 4: Unpack shortcuts into original node sequence.
+	origNodes := unpackOverlayPath(e.chg, overlayNodes)
+
+	// Step 5: Build geometry from original node sequence.
+	totalDistMeters := float64(mu) / 1000.0
+	geometry := e.buildGeometry(origNodes)
+
 	result := &RouteResult{
 		TotalDistanceMeters: totalDistMeters,
 		Segments: []Segment{
 			{
 				DistanceMeters: totalDistMeters,
-				Geometry: []LatLng{
-					{Lat: start.Lat, Lng: start.Lng},
-					{Lat: end.Lat, Lng: end.Lng},
-				},
+				Geometry:       geometry,
 			},
 		},
 	}
 
 	return result, nil
+}
+
+// reconstructOverlayPath builds the full overlay node path from
+// source seed → meetNode → target seed.
+func (e *Engine) reconstructOverlayPath(meetNode uint32, fwdPred, bwdPred map[uint32]uint32) []uint32 {
+	// Forward path: meetNode ← ... ← source seed (trace backwards, then reverse).
+	var fwdPath []uint32
+	node := meetNode
+	for {
+		fwdPath = append(fwdPath, node)
+		pred, ok := fwdPred[node]
+		if !ok {
+			break
+		}
+		node = pred
+	}
+	// Reverse to get source → meetNode.
+	for i, j := 0, len(fwdPath)-1; i < j; i, j = i+1, j-1 {
+		fwdPath[i], fwdPath[j] = fwdPath[j], fwdPath[i]
+	}
+
+	// Backward path: meetNode → ... → target seed.
+	// bwdPred[v] = u means original direction v → u (toward target).
+	node = meetNode
+	for {
+		pred, ok := bwdPred[node]
+		if !ok {
+			break
+		}
+		fwdPath = append(fwdPath, pred)
+		node = pred
+	}
+
+	return fwdPath
+}
+
+// buildGeometry converts a sequence of original graph node IDs into lat/lng
+// coordinates, including intermediate shape points from edge geometry.
+func (e *Engine) buildGeometry(nodes []uint32) []LatLng {
+	if len(nodes) == 0 {
+		return nil
+	}
+
+	g := e.origGraph
+	var geom []LatLng
+
+	// Add first node.
+	geom = append(geom, LatLng{Lat: g.NodeLat[nodes[0]], Lng: g.NodeLon[nodes[0]]})
+
+	for i := 0; i < len(nodes)-1; i++ {
+		u := nodes[i]
+		v := nodes[i+1]
+
+		// Look up edge u→v in original graph for intermediate shape points.
+		if g.GeoFirstOut != nil {
+			edgeIdx := findEdge(g.FirstOut, g.Head, u, v)
+			if edgeIdx != noNode && edgeIdx < uint32(len(g.GeoFirstOut)-1) {
+				geoStart := g.GeoFirstOut[edgeIdx]
+				geoEnd := g.GeoFirstOut[edgeIdx+1]
+				for k := geoStart; k < geoEnd; k++ {
+					geom = append(geom, LatLng{
+						Lat: g.GeoShapeLat[k],
+						Lng: g.GeoShapeLon[k],
+					})
+				}
+			}
+		}
+
+		// Add target node coordinates.
+		geom = append(geom, LatLng{Lat: g.NodeLat[v], Lng: g.NodeLon[v]})
+	}
+
+	return geom
 }
 
 // seedForward seeds the forward PQ with the start snap point's reachable nodes.
@@ -141,8 +219,8 @@ func seedBackward(qs *QueryState, g *graph.Graph, snap SnapResult) {
 	}
 }
 
-// runCHDijkstra runs bidirectional CH Dijkstra and returns (mu, meetNode).
-func (e *Engine) runCHDijkstra(ctx context.Context, qs *QueryState) (uint32, uint32) {
+// runCHDijkstra runs bidirectional CH Dijkstra with predecessor tracking.
+func (e *Engine) runCHDijkstra(ctx context.Context, qs *QueryState, fwdPred, bwdPred map[uint32]uint32) (uint32, uint32) {
 	mu := uint32(math.MaxUint32)
 	meetNode := noNode
 
@@ -185,6 +263,7 @@ func (e *Engine) runCHDijkstra(ctx context.Context, qs *QueryState) (uint32, uin
 				if newDist < qs.DistFwd[v] {
 					qs.touchFwd(v, newDist)
 					qs.FwdPQ.Push(v, newDist)
+					fwdPred[v] = u
 				}
 			}
 		}
@@ -218,6 +297,7 @@ func (e *Engine) runCHDijkstra(ctx context.Context, qs *QueryState) (uint32, uin
 				if newDist < qs.DistBwd[v] {
 					qs.touchBwd(v, newDist)
 					qs.BwdPQ.Push(v, newDist)
+					bwdPred[v] = u
 				}
 			}
 		}
@@ -229,4 +309,9 @@ func (e *Engine) runCHDijkstra(ctx context.Context, qs *QueryState) (uint32, uin
 	}
 
 	return mu, meetNode
+}
+
+// distBetween computes the distance in meters between two LatLng points.
+func distBetween(a, b LatLng) float64 {
+	return geo.Haversine(a.Lat, a.Lng, b.Lat, b.Lng)
 }

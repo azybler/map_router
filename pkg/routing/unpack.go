@@ -2,163 +2,87 @@ package routing
 
 import "map_router/pkg/graph"
 
-const maxUnpackDepth = 100
+const maxUnpackDepth = 200
 
-// UnpackPath recursively unpacks shortcut edges into original edge sequences.
-// Uses iterative approach with explicit stack to avoid stack overflow.
-func UnpackPath(chg *graph.CHGraph, fwdPred, bwdPred map[uint32]predInfo, meetNode uint32) []uint32 {
-	if meetNode == noNode {
-		return nil
+const noNode = ^uint32(0) // sentinel for "no node"
+
+// unpackOverlayPath takes a sequence of overlay-level nodes and unpacks all
+// shortcut hops into original-graph node sequences.
+func unpackOverlayPath(chg *graph.CHGraph, overlayNodes []uint32) []uint32 {
+	if len(overlayNodes) < 2 {
+		return overlayNodes
 	}
 
-	// Reconstruct forward path: source → meetNode.
-	var fwdPath []uint32
-	node := meetNode
-	for {
-		info, ok := fwdPred[node]
-		if !ok {
-			break
-		}
-		fwdPath = append(fwdPath, info.edgeIdx)
-		node = info.prevNode
-	}
-	// Reverse to get source→meetNode order.
-	for i, j := 0, len(fwdPath)-1; i < j; i, j = i+1, j-1 {
-		fwdPath[i], fwdPath[j] = fwdPath[j], fwdPath[i]
-	}
-
-	// Reconstruct backward path: meetNode → target.
-	var bwdPath []uint32
-	node = meetNode
-	for {
-		info, ok := bwdPred[node]
-		if !ok {
-			break
-		}
-		bwdPath = append(bwdPath, info.edgeIdx)
-		node = info.prevNode
-	}
-
-	// Unpack all edges.
 	var result []uint32
+	result = append(result, overlayNodes[0])
 
-	// Unpack forward path (uses forward graph).
-	for _, edgeIdx := range fwdPath {
-		unpackForwardEdge(chg, edgeIdx, &result)
-	}
-
-	// Unpack backward path (uses backward graph).
-	for _, edgeIdx := range bwdPath {
-		unpackBackwardEdge(chg, edgeIdx, &result)
+	for i := 0; i < len(overlayNodes)-1; i++ {
+		unpacked := unpackHop(chg, overlayNodes[i], overlayNodes[i+1])
+		// Skip first node (already in result) to avoid duplication.
+		if len(unpacked) > 1 {
+			result = append(result, unpacked[1:]...)
+		}
 	}
 
 	return result
 }
 
-// predInfo tracks predecessor for path reconstruction.
-type predInfo struct {
-	prevNode uint32
-	edgeIdx  uint32
-}
-
-const noNode = ^uint32(0) // sentinel for "no node"
-
-// unpackForwardEdge iteratively unpacks a forward shortcut edge into original edges.
-func unpackForwardEdge(chg *graph.CHGraph, edgeIdx uint32, result *[]uint32) {
-	type stackItem struct {
-		edgeIdx uint32
-		isFwd   bool
-		depth   int
+// unpackHop iteratively unpacks a single overlay hop from→to into a sequence
+// of original-graph nodes. Uses an explicit stack to avoid recursion.
+func unpackHop(chg *graph.CHGraph, from, to uint32) []uint32 {
+	type item struct {
+		from, to uint32
+		depth    int
 	}
 
-	stack := []stackItem{{edgeIdx, true, 0}}
+	stack := []item{{from, to, 0}}
+	var result []uint32
 
 	for len(stack) > 0 {
-		item := stack[len(stack)-1]
+		it := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 
-		if item.depth > maxUnpackDepth {
+		if it.depth > maxUnpackDepth {
 			continue // safety bound
 		}
 
-		var middle int32
-		var head, from uint32
-		if item.isFwd {
-			middle = chg.FwdMiddle[item.edgeIdx]
-			head = chg.FwdHead[item.edgeIdx]
-			from = findCSRSource(chg.FwdFirstOut, item.edgeIdx)
-		} else {
-			middle = chg.BwdMiddle[item.edgeIdx]
-			head = chg.BwdHead[item.edgeIdx]
-			from = findCSRSource(chg.BwdFirstOut, item.edgeIdx)
-		}
-
+		middle := findMiddle(chg, it.from, it.to)
 		if middle < 0 {
-			// Original edge — add to result.
-			_ = from
-			_ = head
-			*result = append(*result, item.edgeIdx)
+			// Original edge — append nodes.
+			if len(result) == 0 || result[len(result)-1] != it.from {
+				result = append(result, it.from)
+			}
+			result = append(result, it.to)
 			continue
 		}
 
-		// Shortcut edge from→head via middle.
-		// Unpack: from→middle, then middle→head.
-		mid := uint32(middle)
-
-		// Find the edge from→mid in the forward graph.
-		fromMidEdge := findEdge(chg.FwdFirstOut, chg.FwdHead, from, mid)
-		// Find the edge mid→head in the forward graph.
-		midHeadEdge := findEdge(chg.FwdFirstOut, chg.FwdHead, mid, head)
-
-		if fromMidEdge != noNode && midHeadEdge != noNode {
-			// Push in reverse order (mid→head first, from→mid second) so from→mid is processed first.
-			stack = append(stack, stackItem{midHeadEdge, true, item.depth + 1})
-			stack = append(stack, stackItem{fromMidEdge, true, item.depth + 1})
-		}
+		m := uint32(middle)
+		// Push right half first (m→to), then left half (from→m),
+		// so left is processed first (LIFO).
+		stack = append(stack, item{m, it.to, it.depth + 1})
+		stack = append(stack, item{it.from, m, it.depth + 1})
 	}
+
+	return result
 }
 
-// unpackBackwardEdge iteratively unpacks a backward shortcut edge.
-// Backward edges are stored reversed: edge from node u pointing to higher-rank v.
-// When traversed during backward search, they represent v→u in the original graph.
-func unpackBackwardEdge(chg *graph.CHGraph, edgeIdx uint32, result *[]uint32) {
-	type stackItem struct {
-		edgeIdx uint32
-		depth   int
+// findMiddle looks up the middle (contracted) node for an edge from→to in the
+// CH overlay. Returns -1 if the edge is original (not a shortcut).
+//
+// The edge might be stored as:
+//   - Forward overlay edge from→to (if rank[from] < rank[to])
+//   - Backward overlay edge to→from (if rank[to] < rank[from]), representing
+//     original direction from→to
+func findMiddle(chg *graph.CHGraph, from, to uint32) int32 {
+	// Try forward overlay: edge from→to.
+	if edge := findEdge(chg.FwdFirstOut, chg.FwdHead, from, to); edge != noNode {
+		return chg.FwdMiddle[edge]
 	}
-
-	stack := []stackItem{{edgeIdx, 0}}
-
-	for len(stack) > 0 {
-		item := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-
-		if item.depth > maxUnpackDepth {
-			continue
-		}
-
-		middle := chg.BwdMiddle[item.edgeIdx]
-
-		if middle < 0 {
-			*result = append(*result, item.edgeIdx)
-			continue
-		}
-
-		// Backward edge from u→v (stored), represents v→u in reality.
-		from := findCSRSource(chg.BwdFirstOut, item.edgeIdx)
-		head := chg.BwdHead[item.edgeIdx]
-		mid := uint32(middle)
-
-		// The shortcut represents head→mid→from in the original graph.
-		// Unpack: head→mid, then mid→from.
-		headMidEdge := findEdge(chg.BwdFirstOut, chg.BwdHead, mid, head)
-		midFromEdge := findEdge(chg.BwdFirstOut, chg.BwdHead, from, mid)
-
-		if headMidEdge != noNode && midFromEdge != noNode {
-			stack = append(stack, stackItem{midFromEdge, item.depth + 1})
-			stack = append(stack, stackItem{headMidEdge, item.depth + 1})
-		}
+	// Try backward overlay: edge to→from (represents original from→to).
+	if edge := findEdge(chg.BwdFirstOut, chg.BwdHead, to, from); edge != noNode {
+		return chg.BwdMiddle[edge]
 	}
+	return -1
 }
 
 // findEdge finds an edge from source to target in a CSR graph.
@@ -171,19 +95,4 @@ func findEdge(firstOut, head []uint32, source, target uint32) uint32 {
 		}
 	}
 	return noNode
-}
-
-// findCSRSource finds the source node for an edge index in a CSR graph.
-func findCSRSource(firstOut []uint32, edgeIdx uint32) uint32 {
-	n := uint32(len(firstOut) - 1)
-	lo, hi := uint32(0), n
-	for lo < hi {
-		mid := (lo + hi) / 2
-		if firstOut[mid+1] <= edgeIdx {
-			lo = mid + 1
-		} else {
-			hi = mid
-		}
-	}
-	return lo
 }
