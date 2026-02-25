@@ -111,10 +111,37 @@ type wayInfo struct {
 	Backward bool
 }
 
+// BBox defines a geographic bounding box for filtering.
+// If non-zero, only edges with both endpoints inside the box are kept.
+type BBox struct {
+	MinLat, MaxLat float64
+	MinLng, MaxLng float64
+}
+
+// IsZero returns true if the bbox is unset.
+func (b BBox) IsZero() bool {
+	return b.MinLat == 0 && b.MaxLat == 0 && b.MinLng == 0 && b.MaxLng == 0
+}
+
+// Contains returns true if the point is inside the bounding box.
+func (b BBox) Contains(lat, lng float64) bool {
+	return lat >= b.MinLat && lat <= b.MaxLat && lng >= b.MinLng && lng <= b.MaxLng
+}
+
+// ParseOptions configures the OSM parser.
+type ParseOptions struct {
+	BBox BBox // if non-zero, filter edges to this bounding box
+}
+
 // Parse reads an OSM PBF file and returns directed edges for car routing.
 // The reader is consumed twice (seeks back to start for the second pass),
 // so it must implement io.ReadSeeker.
-func Parse(ctx context.Context, rs io.ReadSeeker) (*ParseResult, error) {
+func Parse(ctx context.Context, rs io.ReadSeeker, opts ...ParseOptions) (*ParseResult, error) {
+	var opt ParseOptions
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
+	useBBox := !opt.BBox.IsZero()
 	// Pass 1: Scan ways to collect referenced node IDs and way info.
 	referencedNodes := make(map[osm.NodeID]struct{})
 	var ways []wayInfo
@@ -200,6 +227,7 @@ func Parse(ctx context.Context, rs io.ReadSeeker) (*ParseResult, error) {
 	// Build edges from ways.
 	var edges []RawEdge
 	var skippedEdges int
+	var bboxFiltered int
 
 	for _, w := range ways {
 		for i := 0; i < len(w.NodeIDs)-1; i++ {
@@ -213,6 +241,12 @@ func Parse(ctx context.Context, rs io.ReadSeeker) (*ParseResult, error) {
 
 			if !fromOk || !toOk {
 				skippedEdges++
+				continue
+			}
+
+			// Bounding box filter: skip edges with any endpoint outside.
+			if useBBox && (!opt.BBox.Contains(fromLat, fromLon) || !opt.BBox.Contains(toLat, toLon)) {
+				bboxFiltered++
 				continue
 			}
 
@@ -241,6 +275,9 @@ func Parse(ctx context.Context, rs io.ReadSeeker) (*ParseResult, error) {
 
 	if skippedEdges > 0 {
 		log.Printf("Warning: skipped %d edges due to missing node coordinates", skippedEdges)
+	}
+	if bboxFiltered > 0 {
+		log.Printf("Filtered %d edges outside bounding box", bboxFiltered)
 	}
 	log.Printf("Built %d directed edges", len(edges))
 

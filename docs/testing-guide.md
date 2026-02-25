@@ -30,15 +30,16 @@ make vet
 
 ## End-to-End Testing with Singapore Data
 
-### 1. Download Singapore OSM Extract
+### 1. Download OSM Extract
 
-Download the latest Singapore extract from Geofabrik:
+Download the Malaysia-Singapore-Brunei extract from Geofabrik (Geofabrik does not
+offer a Singapore-only file):
 
 ```bash
-wget https://download.geofabrik.de/asia/malaysia-singapore-brunei-latest.osm.pbf -O singapore.osm.pbf
+wget https://download.geofabrik.de/asia/malaysia-singapore-brunei-latest.osm.pbf
 ```
 
-The file is approximately 100-150 MB.
+The file is approximately 200-250 MB.
 
 ### 2. Build Binaries
 
@@ -50,8 +51,18 @@ This produces `bin/preprocess` and `bin/server`.
 
 ### 3. Preprocess the Graph
 
+Use the `--singapore` flag to filter the PBF to Singapore roads only. Without
+this flag, the graph includes all of Malaysia and Brunei (~7M nodes) and
+contraction will take hours instead of minutes.
+
 ```bash
-bin/preprocess --input singapore.osm.pbf --output graph.bin
+bin/preprocess --input malaysia-singapore-brunei-latest.osm.pbf --output graph.bin --singapore
+```
+
+You can also use `--bbox` for a custom bounding box (minLat,minLng,maxLat,maxLng):
+
+```bash
+bin/preprocess --input file.osm.pbf --output graph.bin --bbox 1.15,103.6,1.48,104.1
 ```
 
 The preprocessor will:
