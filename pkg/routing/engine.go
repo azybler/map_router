@@ -3,12 +3,9 @@ package routing
 import (
 	"context"
 	"errors"
-	"log"
 	"math"
 	"sync"
-	"time"
 
-	"map_router/pkg/geo"
 	"map_router/pkg/graph"
 )
 
@@ -61,8 +58,6 @@ func NewEngine(chg *graph.CHGraph, origGraph *graph.Graph) *Engine {
 
 // Route computes the shortest path between two points.
 func (e *Engine) Route(ctx context.Context, start, end LatLng) (*RouteResult, error) {
-	t0 := time.Now()
-
 	// Step 1: Snap points to nearest road segments.
 	startSnap, err := e.snapper.Snap(start.Lat, start.Lng)
 	if err != nil {
@@ -72,8 +67,6 @@ func (e *Engine) Route(ctx context.Context, start, end LatLng) (*RouteResult, er
 	if err != nil {
 		return nil, err
 	}
-
-	t1 := time.Now()
 
 	// Step 2: Run bidirectional CH Dijkstra with predecessor tracking.
 	qs := e.qsPool.Get().(*QueryState)
@@ -89,8 +82,6 @@ func (e *Engine) Route(ctx context.Context, start, end LatLng) (*RouteResult, er
 
 	mu, meetNode := e.runCHDijkstra(ctx, qs)
 
-	t2 := time.Now()
-
 	if meetNode == noNode || mu == math.MaxUint32 {
 		return nil, ErrNoRoute
 	}
@@ -98,24 +89,14 @@ func (e *Engine) Route(ctx context.Context, start, end LatLng) (*RouteResult, er
 	// Step 3: Reconstruct overlay node path.
 	overlayNodes := e.reconstructOverlayPath(meetNode, qs.PredFwd, qs.PredBwd)
 
-	t3 := time.Now()
-
 	// Step 4: Unpack shortcuts into original node sequence.
 	origNodes := unpackOverlayPath(e.chg, overlayNodes)
-
-	t4 := time.Now()
 
 	// Step 5: Build geometry from original node sequence.
 	totalDistMeters := float64(mu) / 1000.0
 	geometry := e.buildGeometry(origNodes)
 
-	t5 := time.Now()
-
-	log.Printf("[route-timing] snap=%v dijkstra=%v reconstruct=%v unpack=%v geometry=%v | overlay=%d orig=%d geom=%d",
-		t1.Sub(t0), t2.Sub(t1), t3.Sub(t2), t4.Sub(t3), t5.Sub(t4),
-		len(overlayNodes), len(origNodes), len(geometry))
-
-	result := &RouteResult{
+	return &RouteResult{
 		TotalDistanceMeters: totalDistMeters,
 		Segments: []Segment{
 			{
@@ -123,9 +104,7 @@ func (e *Engine) Route(ctx context.Context, start, end LatLng) (*RouteResult, er
 				Geometry:       geometry,
 			},
 		},
-	}
-
-	return result, nil
+	}, nil
 }
 
 // reconstructOverlayPath builds the full overlay node path from
@@ -332,9 +311,4 @@ func (e *Engine) runCHDijkstra(ctx context.Context, qs *QueryState) (uint32, uin
 	}
 
 	return mu, meetNode
-}
-
-// distBetween computes the distance in meters between two LatLng points.
-func distBetween(a, b LatLng) float64 {
-	return geo.Haversine(a.Lat, a.Lng, b.Lat, b.Lng)
 }

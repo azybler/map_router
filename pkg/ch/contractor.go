@@ -165,31 +165,31 @@ type shortcut struct {
 // per (incoming, outgoing) pair. This reduces search count from O(|in|*|out|)
 // to O(|in|).
 func findShortcuts(ws *witnessState, outAdj, inAdj [][]adjEntry, node uint32, contracted []bool) []shortcut {
-	// Collect active incoming and outgoing neighbors.
-	var incoming []adjEntry
+	// Collect active incoming and outgoing neighbors using reusable buffers.
+	ws.incoming = ws.incoming[:0]
 	for _, e := range inAdj[node] {
 		if !contracted[e.to] {
-			incoming = append(incoming, e)
+			ws.incoming = append(ws.incoming, e)
 		}
 	}
 
-	var outgoing []adjEntry
+	ws.outgoing = ws.outgoing[:0]
 	for _, e := range outAdj[node] {
 		if !contracted[e.to] {
-			outgoing = append(outgoing, e)
+			ws.outgoing = append(ws.outgoing, e)
 		}
 	}
 
-	if len(incoming) == 0 || len(outgoing) == 0 {
+	if len(ws.incoming) == 0 || len(ws.outgoing) == 0 {
 		return nil
 	}
 
-	var shortcuts []shortcut
+	ws.shortcuts = ws.shortcuts[:0]
 
-	for _, in := range incoming {
+	for _, in := range ws.incoming {
 		// Find max outgoing weight for upper bound of this batch search.
 		var maxOut uint32
-		for _, out := range outgoing {
+		for _, out := range ws.outgoing {
 			if out.to != in.to && out.weight > maxOut {
 				maxOut = out.weight
 			}
@@ -203,7 +203,7 @@ func findShortcuts(ws *witnessState, outAdj, inAdj [][]adjEntry, node uint32, co
 		// Run ONE Dijkstra from in.to, then check all outgoing targets.
 		batchWitnessSearch(ws, outAdj, in.to, node, maxWeight, contracted)
 
-		for _, out := range outgoing {
+		for _, out := range ws.outgoing {
 			if out.to == in.to {
 				continue // skip self-loops
 			}
@@ -213,7 +213,7 @@ func findShortcuts(ws *witnessState, outAdj, inAdj [][]adjEntry, node uint32, co
 			// Check if witness path exists: dist[out.to] <= scWeight means
 			// there's an alternative path at least as good as the shortcut.
 			if ws.dist[out.to] > scWeight {
-				shortcuts = append(shortcuts, shortcut{
+				ws.shortcuts = append(ws.shortcuts, shortcut{
 					from:   in.to,
 					to:     out.to,
 					weight: scWeight,
@@ -222,7 +222,7 @@ func findShortcuts(ws *witnessState, outAdj, inAdj [][]adjEntry, node uint32, co
 		}
 	}
 
-	return shortcuts
+	return ws.shortcuts
 }
 
 // computePriority returns the priority for a node (lower = contract first).

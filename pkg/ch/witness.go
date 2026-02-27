@@ -82,6 +82,11 @@ type witnessState struct {
 	dist    []uint32 // distance array indexed by node ID
 	touched []uint32 // list of nodes touched (for fast reset)
 	heap    witnessHeap
+
+	// Reusable buffers for findShortcuts (avoids per-call allocations).
+	incoming  []adjEntry
+	outgoing  []adjEntry
+	shortcuts []shortcut
 }
 
 func newWitnessState(numNodes uint32) *witnessState {

@@ -15,7 +15,6 @@ import (
 type Handlers struct {
 	router routing.Router
 	stats  StatsResponse
-	ready  bool
 }
 
 // NewHandlers creates handlers with the given router.
@@ -23,7 +22,6 @@ func NewHandlers(router routing.Router, stats StatsResponse) *Handlers {
 	return &Handlers{
 		router: router,
 		stats:  stats,
-		ready:  true,
 	}
 }
 
@@ -33,24 +31,24 @@ func (h *Handlers) HandleRoute(w http.ResponseWriter, r *http.Request) {
 	// Enforce Content-Type.
 	mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if mediaType != "application/json" {
-		writeError(w, http.StatusBadRequest, "invalid_request", "Content-Type must be application/json", "", 0)
+		writeError(w, http.StatusBadRequest, "invalid_request", "")
 		return
 	}
 
 	// Parse request.
 	var req RouteRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", "", "", 0)
+		writeError(w, http.StatusBadRequest, "invalid_request", "")
 		return
 	}
 
 	// Validate coordinates.
-	if err := validateCoord(req.Start, "start"); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_coordinates", err.Error(), "start", 0)
+	if err := validateCoord(req.Start); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_coordinates", "start")
 		return
 	}
-	if err := validateCoord(req.End, "end"); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_coordinates", err.Error(), "end", 0)
+	if err := validateCoord(req.End); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_coordinates", "end")
 		return
 	}
 
@@ -58,18 +56,18 @@ func (h *Handlers) HandleRoute(w http.ResponseWriter, r *http.Request) {
 	result, err := h.router.Route(r.Context(), routing.LatLng{Lat: req.Start.Lat, Lng: req.Start.Lng}, routing.LatLng{Lat: req.End.Lat, Lng: req.End.Lng})
 	if err != nil {
 		if errors.Is(err, routing.ErrPointTooFar) {
-			writeError(w, http.StatusUnprocessableEntity, "point_too_far_from_road", "", "", 0)
+			writeError(w, http.StatusUnprocessableEntity, "point_too_far_from_road", "")
 			return
 		}
 		if errors.Is(err, routing.ErrNoRoute) {
-			writeError(w, http.StatusNotFound, "no_route_found", "", "", 0)
+			writeError(w, http.StatusNotFound, "no_route_found", "")
 			return
 		}
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			writeError(w, http.StatusServiceUnavailable, "request_timeout", "", "", 0)
+			writeError(w, http.StatusServiceUnavailable, "request_timeout", "")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "internal_error", "", "", 0)
+		writeError(w, http.StatusInternalServerError, "internal_error", "")
 		return
 	}
 
@@ -94,13 +92,8 @@ func (h *Handlers) HandleRoute(w http.ResponseWriter, r *http.Request) {
 
 // HandleHealth handles GET /api/v1/health.
 func (h *Handlers) HandleHealth(w http.ResponseWriter, r *http.Request) {
-	resp := HealthResponse{Status: "ok"}
-	if !h.ready {
-		resp.Status = "loading"
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	json.NewEncoder(w).Encode(HealthResponse{Status: "ok"})
 }
 
 // HandleStats handles GET /api/v1/stats.
@@ -109,7 +102,7 @@ func (h *Handlers) HandleStats(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(h.stats)
 }
 
-func validateCoord(ll LatLngJSON, field string) error {
+func validateCoord(ll LatLngJSON) error {
 	if math.IsNaN(ll.Lat) || math.IsNaN(ll.Lng) || math.IsInf(ll.Lat, 0) || math.IsInf(ll.Lng, 0) {
 		return errors.New("coordinates must be finite numbers")
 	}
@@ -119,15 +112,8 @@ func validateCoord(ll LatLngJSON, field string) error {
 	return nil
 }
 
-func writeError(w http.ResponseWriter, status int, code, message, field string, dist float64) {
-	resp := ErrorResponse{
-		Error: code,
-		Field: field,
-	}
-	if dist > 0 {
-		resp.DistanceMeters = dist
-	}
+func writeError(w http.ResponseWriter, status int, code, field string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(resp)
+	json.NewEncoder(w).Encode(ErrorResponse{Error: code, Field: field})
 }

@@ -26,9 +26,8 @@ type SegmentJSON struct {
 
 // ErrorResponse is the JSON response for errors.
 type ErrorResponse struct {
-	Error          string  `json:"error"`
-	Field          string  `json:"field,omitempty"`
-	DistanceMeters float64 `json:"distance_meters,omitempty"`
+	Error string `json:"error"`
+	Field string `json:"field,omitempty"`
 }
 
 // StatsResponse is the JSON response for GET /api/v1/stats.

@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"runtime"
 	"unsafe"
 )
 
@@ -16,6 +17,14 @@ const (
 	maxNodes   = 10_000_000
 	maxEdges   = 50_000_000
 )
+
+func init() {
+	// The binary format uses unsafe.Slice to write native-endian data.
+	// Verify we're on a little-endian platform to prevent silent corruption.
+	if runtime.GOARCH == "s390x" || runtime.GOARCH == "ppc64" {
+		panic("map_router binary format requires a little-endian platform")
+	}
+}
 
 // fileHeader is the binary header.
 type fileHeader struct {
