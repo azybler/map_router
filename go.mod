@@ -1,6 +1,6 @@
 module map_router
 
-go 1.25.0
+go 1.26.0
 
 require github.com/paulmach/osm v0.9.0
 

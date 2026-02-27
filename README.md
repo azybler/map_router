@@ -15,7 +15,7 @@ The system has two phases:
 
 ### Prerequisites
 
-- Go 1.25+
+- Go 1.26+
 
 ### Build
 

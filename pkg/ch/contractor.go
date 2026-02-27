@@ -45,7 +45,7 @@ func Contract(g *graph.Graph) *graph.CHGraph {
 
 	// Initialize priority queue with all nodes.
 	pq := newContractionPQ(int(n))
-	for i := uint32(0); i < n; i++ {
+	for i := range n {
 		pq.Push(i, computePriority(outAdj, inAdj, i, contracted, contractedNeighbors[i], level[i]))
 	}
 
