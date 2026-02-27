@@ -2,7 +2,6 @@ package ch
 
 import (
 	"log"
-	"sort"
 
 	"map_router/pkg/graph"
 )
@@ -306,12 +305,6 @@ func buildOverlay(orig *graph.Graph, outAdj, inAdj [][]adjEntry, rank []uint32) 
 			pos[e.from]++
 		}
 
-		// Sort each node's adjacency range by head for binary search lookup.
-		for u := uint32(0); u < n; u++ {
-			s, e := firstOut[u], firstOut[u+1]
-			sortAdjRange(head[s:e], weight[s:e], middle[s:e])
-		}
-
 		return
 	}
 
@@ -407,27 +400,4 @@ func (pq *contractionPQ) siftDown(i int) {
 		i = child
 	}
 	pq.items[i] = item
-}
-
-// sortAdjRange sorts a CSR adjacency range by head value (in-place),
-// co-permuting weight and middle arrays. Enables binary search in findEdge.
-func sortAdjRange(head []uint32, weight []uint32, middle []int32) {
-	if len(head) <= 1 {
-		return
-	}
-	sort.Sort(adjRangeSorter{head: head, weight: weight, middle: middle})
-}
-
-type adjRangeSorter struct {
-	head   []uint32
-	weight []uint32
-	middle []int32
-}
-
-func (s adjRangeSorter) Len() int           { return len(s.head) }
-func (s adjRangeSorter) Less(i, j int) bool { return s.head[i] < s.head[j] }
-func (s adjRangeSorter) Swap(i, j int) {
-	s.head[i], s.head[j] = s.head[j], s.head[i]
-	s.weight[i], s.weight[j] = s.weight[j], s.weight[i]
-	s.middle[i], s.middle[j] = s.middle[j], s.middle[i]
 }
