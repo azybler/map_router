@@ -12,7 +12,7 @@ func TestUnionFind(t *testing.T) {
 	uf := NewUnionFind(5)
 
 	// Initially all separate.
-	for i := uint32(0); i < 5; i++ {
+	for i := range uint32(5) {
 		if uf.Find(i) != i {
 			t.Errorf("Find(%d) = %d, want %d", i, uf.Find(i), i)
 		}

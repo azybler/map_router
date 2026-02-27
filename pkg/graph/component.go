@@ -12,7 +12,7 @@ type UnionFind struct {
 func NewUnionFind(n uint32) *UnionFind {
 	parent := make([]uint32, n)
 	size := make([]uint32, n)
-	for i := uint32(0); i < n; i++ {
+	for i := range n {
 		parent[i] = i
 		size[i] = 1
 	}

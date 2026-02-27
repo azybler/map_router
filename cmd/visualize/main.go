@@ -173,7 +173,7 @@ func queryORS(req compareRequest) routeResult {
 	}
 
 	// ORS uses [lng, lat] order
-	body, _ := json.Marshal(map[string]interface{}{
+	body, _ := json.Marshal(map[string]any{
 		"coordinates": [][]float64{
 			{req.Start.Lng, req.Start.Lat},
 			{req.End.Lng, req.End.Lat},

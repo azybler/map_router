@@ -28,7 +28,7 @@ func Contract(g *graph.Graph) *graph.CHGraph {
 	outAdj := make([][]adjEntry, n)
 	inAdj := make([][]adjEntry, n)
 
-	for u := uint32(0); u < n; u++ {
+	for u := range n {
 		start, end := g.EdgesFrom(u)
 		for e := start; e < end; e++ {
 			v := g.Head[e]
@@ -45,7 +45,7 @@ func Contract(g *graph.Graph) *graph.CHGraph {
 
 	// Initialize priority queue with all nodes.
 	pq := make(priorityQueue, n)
-	for i := uint32(0); i < n; i++ {
+	for i := range n {
 		pq[i] = &pqEntry{
 			node:     i,
 			priority: computePriority(outAdj, inAdj, i, contracted, contractedNeighbors[i], level[i]),
@@ -143,7 +143,7 @@ func Contract(g *graph.Graph) *graph.CHGraph {
 
 	// Assign ranks to remaining uncontracted core nodes.
 	coreSize := uint32(0)
-	for i := uint32(0); i < n; i++ {
+	for i := range n {
 		if !contracted[i] {
 			contracted[i] = true
 			rank[i] = order
@@ -268,7 +268,7 @@ func buildOverlay(orig *graph.Graph, outAdj, inAdj [][]adjEntry, rank []uint32) 
 
 	var fwdEdges, bwdEdges []csrEdge
 
-	for u := uint32(0); u < n; u++ {
+	for u := range n {
 		for _, e := range outAdj[u] {
 			if rank[u] < rank[e.to] {
 				fwdEdges = append(fwdEdges, csrEdge{from: u, to: e.to, weight: e.weight, middle: e.middle})

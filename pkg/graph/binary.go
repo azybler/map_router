@@ -8,7 +8,6 @@ import (
 	"math"
 	"os"
 	"unsafe"
-
 )
 
 const (
@@ -291,10 +290,7 @@ func validateCSR(firstOut, head []uint32, numNodes uint32) error {
 func skipBytes(r io.Reader, n int) error {
 	var buf [32 * 1024]byte
 	for n > 0 {
-		toRead := n
-		if toRead > len(buf) {
-			toRead = len(buf)
-		}
+		toRead := min(n, len(buf))
 		if _, err := io.ReadFull(r, buf[:toRead]); err != nil {
 			return err
 		}
