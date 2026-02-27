@@ -3,6 +3,7 @@ package routing
 import (
 	"errors"
 	"math"
+	"sort"
 
 	"map_router/pkg/geo"
 	"map_router/pkg/graph"
@@ -26,19 +27,6 @@ type SnapResult struct {
 // A 3×3 cell search covers ±1.1 km, well over the 500 m max snap distance.
 const gridCellSize = 0.01
 
-// snapEdge stores an edge index with its precomputed source node,
-// avoiding an O(log N) binary search per candidate during snap queries.
-type snapEdge struct {
-	edgeIdx uint32
-	source  uint32
-}
-
-// Snapper provides nearest-road snapping using a flat spatial grid index.
-type Snapper struct {
-	cells map[uint64][]snapEdge // cellKey → edges with precomputed sources
-	g     *graph.Graph
-}
-
 // gridCell returns the integer cell coordinates for a lat/lon.
 func gridCell(lat, lon float64) (latIdx, lonIdx int32) {
 	return int32(math.Floor(lat / gridCellSize)), int32(math.Floor(lon / gridCellSize))
@@ -49,39 +37,84 @@ func cellKey(latIdx, lonIdx int32) uint64 {
 	return uint64(uint32(latIdx))<<32 | uint64(uint32(lonIdx))
 }
 
-// NewSnapper builds a spatial grid index from the original graph's edges.
-func NewSnapper(g *graph.Graph) *Snapper {
-	cells := make(map[uint64][]snapEdge, g.NumEdges/64)
+// cellEdge stores a cell key and edge data in a flat sortable structure.
+type cellEdge struct {
+	key     uint64
+	edgeIdx uint32
+	source  uint32
+}
 
+// Snapper provides nearest-road snapping using a flat sorted grid index.
+// All edges are stored in a single sorted slice keyed by cell, eliminating
+// per-cell slice allocations and map pointer overhead for reduced GC pressure.
+type Snapper struct {
+	edges []cellEdge // sorted by key
+	g     *graph.Graph
+}
+
+// NewSnapper builds a flat spatial grid index from the original graph's edges.
+func NewSnapper(g *graph.Graph) *Snapper {
+	// First pass: count total entries to pre-allocate.
+	totalEntries := 0
 	for u := uint32(0); u < g.NumNodes; u++ {
 		start, end := g.EdgesFrom(u)
 		for e := start; e < end; e++ {
 			v := g.Head[e]
-
 			uLat, uLon := g.NodeLat[u], g.NodeLon[u]
 			vLat, vLon := g.NodeLat[v], g.NodeLon[v]
 
-			// Bounding box of segment endpoints.
-			minLat := math.Min(uLat, vLat)
-			maxLat := math.Max(uLat, vLat)
-			minLon := math.Min(uLon, vLon)
-			maxLon := math.Max(uLon, vLon)
+			latLo, lonLo := gridCell(math.Min(uLat, vLat), math.Min(uLon, vLon))
+			latHi, lonHi := gridCell(math.Max(uLat, vLat), math.Max(uLon, vLon))
+			totalEntries += int(latHi-latLo+1) * int(lonHi-lonLo+1)
+		}
+	}
 
-			// Insert edge into every cell its bounding box overlaps.
-			latLo, lonLo := gridCell(minLat, minLon)
-			latHi, lonHi := gridCell(maxLat, maxLon)
+	edges := make([]cellEdge, 0, totalEntries)
 
-			se := snapEdge{edgeIdx: e, source: u}
+	// Second pass: populate entries.
+	for u := uint32(0); u < g.NumNodes; u++ {
+		start, end := g.EdgesFrom(u)
+		for e := start; e < end; e++ {
+			v := g.Head[e]
+			uLat, uLon := g.NodeLat[u], g.NodeLon[u]
+			vLat, vLon := g.NodeLat[v], g.NodeLon[v]
+
+			latLo, lonLo := gridCell(math.Min(uLat, vLat), math.Min(uLon, vLon))
+			latHi, lonHi := gridCell(math.Max(uLat, vLat), math.Max(uLon, vLon))
+
 			for la := latLo; la <= latHi; la++ {
 				for lo := lonLo; lo <= lonHi; lo++ {
-					key := cellKey(la, lo)
-					cells[key] = append(cells[key], se)
+					edges = append(edges, cellEdge{
+						key:     cellKey(la, lo),
+						edgeIdx: e,
+						source:  u,
+					})
 				}
 			}
 		}
 	}
 
-	return &Snapper{cells: cells, g: g}
+	sort.Slice(edges, func(i, j int) bool {
+		return edges[i].key < edges[j].key
+	})
+
+	return &Snapper{edges: edges, g: g}
+}
+
+// cellRange returns the slice of edges for the given cell key using binary search.
+func (s *Snapper) cellRange(key uint64) []cellEdge {
+	// Find first entry with this key.
+	lo := sort.Search(len(s.edges), func(i int) bool {
+		return s.edges[i].key >= key
+	})
+	if lo >= len(s.edges) || s.edges[lo].key != key {
+		return nil
+	}
+	// Find first entry past this key.
+	hi := sort.Search(len(s.edges), func(i int) bool {
+		return s.edges[i].key > key
+	})
+	return s.edges[lo:hi]
 }
 
 // Snap finds the nearest road segment to the given lat/lng.
@@ -95,9 +128,9 @@ func (s *Snapper) Snap(lat, lng float64) (SnapResult, error) {
 	for dLat := int32(-1); dLat <= 1; dLat++ {
 		for dLon := int32(-1); dLon <= 1; dLon++ {
 			key := cellKey(centerLat+dLat, centerLon+dLon)
-			for _, se := range s.cells[key] {
-				u := se.source
-				v := s.g.Head[se.edgeIdx]
+			for _, ce := range s.cellRange(key) {
+				u := ce.source
+				v := s.g.Head[ce.edgeIdx]
 
 				exactDist, ratio := geo.PointToSegmentDist(
 					lat, lng,
@@ -108,7 +141,7 @@ func (s *Snapper) Snap(lat, lng float64) (SnapResult, error) {
 				if exactDist < bestDist {
 					bestDist = exactDist
 					bestResult = SnapResult{
-						EdgeIdx: se.edgeIdx,
+						EdgeIdx: ce.edgeIdx,
 						NodeU:   u,
 						NodeV:   v,
 						Ratio:   ratio,
@@ -125,4 +158,3 @@ func (s *Snapper) Snap(lat, lng float64) (SnapResult, error) {
 
 	return bestResult, nil
 }
-

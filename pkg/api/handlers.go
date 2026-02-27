@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"mime"
 	"net/http"
 
 	"map_router/pkg/routing"
@@ -30,7 +31,8 @@ func NewHandlers(router routing.Router, stats StatsResponse) *Handlers {
 // HandleRoute handles POST /api/v1/route.
 func (h *Handlers) HandleRoute(w http.ResponseWriter, r *http.Request) {
 	// Enforce Content-Type.
-	if ct := r.Header.Get("Content-Type"); ct != "application/json" {
+	mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if mediaType != "application/json" {
 		writeError(w, http.StatusBadRequest, "invalid_request", "Content-Type must be application/json", "", 0)
 		return
 	}

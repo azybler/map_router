@@ -43,6 +43,12 @@ func NewServer(cfg ServerConfig, handlers *Handlers) *http.Server {
 	mux.HandleFunc("GET /api/v1/health", withMiddleware(handlers.HandleHealth, sem, cfg))
 	mux.HandleFunc("GET /api/v1/stats", withMiddleware(handlers.HandleStats, sem, cfg))
 
+	// CORS preflight for POST endpoint.
+	if cfg.CORSOrigin != "" {
+		noop := func(http.ResponseWriter, *http.Request) {}
+		mux.HandleFunc("OPTIONS /api/v1/route", withMiddleware(noop, sem, cfg))
+	}
+
 	return &http.Server{
 		Addr:         cfg.Addr,
 		Handler:      mux,
@@ -86,6 +92,16 @@ func withMiddleware(handler http.HandlerFunc, sem chan struct{}, cfg ServerConfi
 		// CORS.
 		if cfg.CORSOrigin != "" {
 			w.Header().Set("Access-Control-Allow-Origin", cfg.CORSOrigin)
+			w.Header().Set("Vary", "Origin")
+
+			// Handle preflight requests.
+			if r.Method == http.MethodOptions {
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+				w.Header().Set("Access-Control-Max-Age", "86400")
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
 		}
 
 		// Concurrency limiter.

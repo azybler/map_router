@@ -306,6 +306,9 @@ func decodePolyline(encoded string) [][]float64 {
 		// Decode latitude.
 		shift, result := uint(0), 0
 		for {
+			if i >= len(encoded) {
+				return points
+			}
 			b := int(encoded[i]) - 63
 			i++
 			result |= (b & 0x1f) << shift
@@ -323,6 +326,9 @@ func decodePolyline(encoded string) [][]float64 {
 		// Decode longitude.
 		shift, result = 0, 0
 		for {
+			if i >= len(encoded) {
+				return points
+			}
 			b := int(encoded[i]) - 63
 			i++
 			result |= (b & 0x1f) << shift

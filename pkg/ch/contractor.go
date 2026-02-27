@@ -1,8 +1,9 @@
 package ch
 
 import (
-	"container/heap"
 	"log"
+	"sort"
+
 	"map_router/pkg/graph"
 )
 
@@ -44,15 +45,10 @@ func Contract(g *graph.Graph) *graph.CHGraph {
 	level := make([]int, n)
 
 	// Initialize priority queue with all nodes.
-	pq := make(priorityQueue, n)
-	for i := range n {
-		pq[i] = &pqEntry{
-			node:     i,
-			priority: computePriority(outAdj, inAdj, i, contracted, contractedNeighbors[i], level[i]),
-			index:    int(i),
-		}
+	pq := newContractionPQ(int(n))
+	for i := uint32(0); i < n; i++ {
+		pq.Push(i, computePriority(outAdj, inAdj, i, contracted, contractedNeighbors[i], level[i]))
 	}
-	heap.Init(&pq)
 
 	// Pre-allocate reusable witness search state.
 	ws := newWitnessState(n)
@@ -67,7 +63,7 @@ func Contract(g *graph.Graph) *graph.CHGraph {
 
 	for pq.Len() > 0 {
 		// Pop minimum-priority node.
-		entry := heap.Pop(&pq).(*pqEntry)
+		entry := pq.Pop()
 		node := entry.node
 
 		if contracted[node] {
@@ -76,9 +72,8 @@ func Contract(g *graph.Graph) *graph.CHGraph {
 
 		// Lazy update: recompute priority and re-insert if it changed.
 		newPriority := computePriority(outAdj, inAdj, node, contracted, contractedNeighbors[node], level[node])
-		if newPriority > entry.priority && pq.Len() > 0 && newPriority > pq[0].priority {
-			entry.priority = newPriority
-			heap.Push(&pq, entry)
+		if newPriority > entry.priority && pq.Len() > 0 && newPriority > pq.PeekPriority() {
+			pq.Push(node, newPriority)
 			continue
 		}
 
@@ -311,6 +306,12 @@ func buildOverlay(orig *graph.Graph, outAdj, inAdj [][]adjEntry, rank []uint32) 
 			pos[e.from]++
 		}
 
+		// Sort each node's adjacency range by head for binary search lookup.
+		for u := uint32(0); u < n; u++ {
+			s, e := firstOut[u], firstOut[u+1]
+			sortAdjRange(head[s:e], weight[s:e], middle[s:e])
+		}
+
 		return
 	}
 
@@ -339,36 +340,94 @@ func buildOverlay(orig *graph.Graph, outAdj, inAdj [][]adjEntry, rank []uint32) 
 	}
 }
 
-// Priority queue implementation for contraction ordering.
+// Concrete-typed priority queue for contraction ordering.
+// Avoids container/heap's interface boxing, pointer per entry, and virtual dispatch.
 
-type pqEntry struct {
+type pqItem struct {
 	node     uint32
 	priority int
-	index    int
 }
 
-type priorityQueue []*pqEntry
-
-func (pq priorityQueue) Len() int           { return len(pq) }
-func (pq priorityQueue) Less(i, j int) bool { return pq[i].priority < pq[j].priority }
-func (pq priorityQueue) Swap(i, j int) {
-	pq[i], pq[j] = pq[j], pq[i]
-	pq[i].index = i
-	pq[j].index = j
+type contractionPQ struct {
+	items []pqItem
 }
 
-func (pq *priorityQueue) Push(x any) {
-	entry := x.(*pqEntry)
-	entry.index = len(*pq)
-	*pq = append(*pq, entry)
+func newContractionPQ(cap int) *contractionPQ {
+	return &contractionPQ{items: make([]pqItem, 0, cap)}
 }
 
-func (pq *priorityQueue) Pop() any {
-	old := *pq
-	n := len(old)
-	entry := old[n-1]
-	old[n-1] = nil
-	entry.index = -1
-	*pq = old[:n-1]
-	return entry
+func (pq *contractionPQ) Len() int { return len(pq.items) }
+
+func (pq *contractionPQ) PeekPriority() int { return pq.items[0].priority }
+
+func (pq *contractionPQ) Push(node uint32, priority int) {
+	pq.items = append(pq.items, pqItem{node, priority})
+	pq.siftUp(len(pq.items) - 1)
+}
+
+func (pq *contractionPQ) Pop() pqItem {
+	top := pq.items[0]
+	n := len(pq.items) - 1
+	pq.items[0] = pq.items[n]
+	pq.items = pq.items[:n]
+	if n > 0 {
+		pq.siftDown(0)
+	}
+	return top
+}
+
+func (pq *contractionPQ) siftUp(i int) {
+	item := pq.items[i]
+	for i > 0 {
+		parent := (i - 1) / 2
+		if item.priority >= pq.items[parent].priority {
+			break
+		}
+		pq.items[i] = pq.items[parent]
+		i = parent
+	}
+	pq.items[i] = item
+}
+
+func (pq *contractionPQ) siftDown(i int) {
+	n := len(pq.items)
+	item := pq.items[i]
+	for {
+		child := 2*i + 1
+		if child >= n {
+			break
+		}
+		if right := child + 1; right < n && pq.items[right].priority < pq.items[child].priority {
+			child = right
+		}
+		if item.priority <= pq.items[child].priority {
+			break
+		}
+		pq.items[i] = pq.items[child]
+		i = child
+	}
+	pq.items[i] = item
+}
+
+// sortAdjRange sorts a CSR adjacency range by head value (in-place),
+// co-permuting weight and middle arrays. Enables binary search in findEdge.
+func sortAdjRange(head []uint32, weight []uint32, middle []int32) {
+	if len(head) <= 1 {
+		return
+	}
+	sort.Sort(adjRangeSorter{head: head, weight: weight, middle: middle})
+}
+
+type adjRangeSorter struct {
+	head   []uint32
+	weight []uint32
+	middle []int32
+}
+
+func (s adjRangeSorter) Len() int           { return len(s.head) }
+func (s adjRangeSorter) Less(i, j int) bool { return s.head[i] < s.head[j] }
+func (s adjRangeSorter) Swap(i, j int) {
+	s.head[i], s.head[j] = s.head[j], s.head[i]
+	s.weight[i], s.weight[j] = s.weight[j], s.weight[i]
+	s.middle[i], s.middle[j] = s.middle[j], s.middle[i]
 }

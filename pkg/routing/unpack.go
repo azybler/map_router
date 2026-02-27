@@ -74,14 +74,21 @@ func findMiddle(chg *graph.CHGraph, from, to uint32) int32 {
 	return -1
 }
 
-// findEdge finds an edge from source to target in a CSR graph.
+// findEdge finds an edge from source to target in a CSR graph using binary
+// search. Requires adjacency lists to be sorted by head (target node).
 func findEdge(firstOut, head []uint32, source, target uint32) uint32 {
-	start := firstOut[source]
-	end := firstOut[source+1]
-	for e := start; e < end; e++ {
-		if head[e] == target {
-			return e
+	lo := int(firstOut[source])
+	hi := int(firstOut[source+1])
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		if head[mid] < target {
+			lo = mid + 1
+		} else {
+			hi = mid
 		}
+	}
+	if lo < int(firstOut[source+1]) && head[lo] == target {
+		return uint32(lo)
 	}
 	return noNode
 }

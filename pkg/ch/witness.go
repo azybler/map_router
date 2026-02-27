@@ -35,35 +35,41 @@ func (h *witnessHeap) Pop() witnessHeapItem {
 	return top
 }
 
+// siftUp uses hole-sift: saves the floating item and does 1 assignment per
+// level instead of 3 (swap).
 func (h *witnessHeap) siftUp(i int) {
+	item := h.items[i]
 	for i > 0 {
 		parent := (i - 1) / 2
-		if h.items[i].dist >= h.items[parent].dist {
+		if item.dist >= h.items[parent].dist {
 			break
 		}
-		h.items[i], h.items[parent] = h.items[parent], h.items[i]
+		h.items[i] = h.items[parent]
 		i = parent
 	}
+	h.items[i] = item
 }
 
+// siftDown uses hole-sift: saves the floating item and does 1 assignment per
+// level instead of 3 (swap).
 func (h *witnessHeap) siftDown(i int) {
 	n := len(h.items)
+	item := h.items[i]
 	for {
-		smallest := i
-		left := 2*i + 1
-		right := 2*i + 2
-		if left < n && h.items[left].dist < h.items[smallest].dist {
-			smallest = left
-		}
-		if right < n && h.items[right].dist < h.items[smallest].dist {
-			smallest = right
-		}
-		if smallest == i {
+		child := 2*i + 1
+		if child >= n {
 			break
 		}
-		h.items[i], h.items[smallest] = h.items[smallest], h.items[i]
-		i = smallest
+		if right := child + 1; right < n && h.items[right].dist < h.items[child].dist {
+			child = right
+		}
+		if item.dist <= h.items[child].dist {
+			break
+		}
+		h.items[i] = h.items[child]
+		i = child
 	}
+	h.items[i] = item
 }
 
 func (h *witnessHeap) Reset() {

@@ -180,7 +180,7 @@ func ReadBinary(path string) (*CHGraph, error) {
 	if hdr.NumNodes > maxNodes {
 		return nil, fmt.Errorf("NumNodes %d exceeds limit %d", hdr.NumNodes, maxNodes)
 	}
-	if hdr.NumFwdEdges > maxEdges || hdr.NumBwdEdges > maxEdges {
+	if hdr.NumFwdEdges > maxEdges || hdr.NumBwdEdges > maxEdges || hdr.NumOrigEdges > maxEdges {
 		return nil, fmt.Errorf("edge count exceeds limit %d", maxEdges)
 	}
 
