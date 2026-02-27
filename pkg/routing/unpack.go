@@ -74,8 +74,9 @@ func findMiddle(chg *graph.CHGraph, from, to uint32) int32 {
 	return -1
 }
 
-// findEdge finds an edge from source to target in a CSR graph using binary
-// search. Requires adjacency lists to be sorted by head (target node).
+// findEdge finds an edge from source to target in a sorted CSR graph using
+// binary search. Requires adjacency lists to be sorted by head (target node).
+// Used for CH overlay lookups (which are sorted in buildOverlay).
 func findEdge(firstOut, head []uint32, source, target uint32) uint32 {
 	lo := int(firstOut[source])
 	hi := int(firstOut[source+1])
@@ -89,6 +90,17 @@ func findEdge(firstOut, head []uint32, source, target uint32) uint32 {
 	}
 	if lo < int(firstOut[source+1]) && head[lo] == target {
 		return uint32(lo)
+	}
+	return noNode
+}
+
+// findEdgeLinear finds an edge from source to target in a CSR graph using
+// linear scan. Works on unsorted adjacency lists (e.g., the original graph).
+func findEdgeLinear(firstOut, head []uint32, source, target uint32) uint32 {
+	for i := firstOut[source]; i < firstOut[source+1]; i++ {
+		if head[i] == target {
+			return i
+		}
 	}
 	return noNode
 }

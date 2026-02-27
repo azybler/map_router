@@ -160,8 +160,9 @@ func (e *Engine) buildGeometry(nodes []uint32) []LatLng {
 		v := nodes[i+1]
 
 		// Look up edge u→v in original graph for intermediate shape points.
+		// Original graph CSR is not sorted by head, so use linear scan.
 		if g.GeoFirstOut != nil {
-			edgeIdx := findEdge(g.FirstOut, g.Head, u, v)
+			edgeIdx := findEdgeLinear(g.FirstOut, g.Head, u, v)
 			if edgeIdx != noNode && edgeIdx < uint32(len(g.GeoFirstOut)-1) {
 				geoStart := g.GeoFirstOut[edgeIdx]
 				geoEnd := g.GeoFirstOut[edgeIdx+1]
