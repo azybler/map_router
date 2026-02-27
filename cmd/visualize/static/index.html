@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Route Comparison</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; height: 100vh; }
+
+#sidebar {
+  width: 320px;
+  min-width: 320px;
+  padding: 20px;
+  background: #fff;
+  border-right: 1px solid #ddd;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+h1 { font-size: 18px; color: #333; }
+
+.field-group { display: flex; flex-direction: column; gap: 4px; }
+.field-group label { font-size: 12px; font-weight: 600; color: #666; text-transform: uppercase; }
+.coord-row { display: flex; gap: 8px; }
+.coord-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 14px;
+  font-family: monospace;
+}
+.coord-row input:focus { outline: none; border-color: #2196F3; }
+
+#compare-btn {
+  padding: 10px;
+  background: #2196F3;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+#compare-btn:hover { background: #1976D2; }
+#compare-btn:disabled { background: #999; cursor: not-allowed; }
+
+.hint { font-size: 12px; color: #999; }
+
+#results { display: none; flex-direction: column; gap: 12px; }
+.result-card {
+  padding: 12px;
+  border-radius: 6px;
+  border-left: 4px solid;
+}
+.result-card.map-router { background: #E3F2FD; border-color: #2196F3; }
+.result-card.ors { background: #FFEBEE; border-color: #F44336; }
+.result-card.google { background: #E8F5E9; border-color: #4CAF50; }
+.result-card h3 { font-size: 13px; margin-bottom: 4px; }
+.result-card .distance { font-size: 20px; font-weight: 700; }
+.result-card .latency { font-size: 13px; color: #666; margin-top: 2px; }
+.result-card .error { color: #c62828; font-size: 13px; }
+
+#diff-line { padding: 8px; background: #f5f5f5; border-radius: 4px; font-size: 13px; text-align: center; }
+
+#map { flex: 1; }
+</style>
+</head>
+<body>
+
+<div id="sidebar">
+  <h1>Route Comparison</h1>
+
+  <div class="field-group">
+    <label>Start</label>
+    <div class="coord-row">
+      <input type="text" id="start-lat" placeholder="lat">
+      <input type="text" id="start-lng" placeholder="lng">
+    </div>
+  </div>
+
+  <div class="field-group">
+    <label>End</label>
+    <div class="coord-row">
+      <input type="text" id="end-lat" placeholder="lat">
+      <input type="text" id="end-lng" placeholder="lng">
+    </div>
+  </div>
+
+  <button id="compare-btn">Compare Routes</button>
+  <p class="hint">Click the map to set start (1st click) and end (2nd click).</p>
+
+  <div id="results">
+    <div class="result-card map-router">
+      <h3>map_router</h3>
+      <div id="mr-result"></div>
+    </div>
+    <div class="result-card ors">
+      <h3>OpenRouteService</h3>
+      <div id="ors-result"></div>
+    </div>
+    <div class="result-card google">
+      <h3>Google Maps</h3>
+      <div id="google-result"></div>
+    </div>
+    <div id="diff-line"></div>
+  </div>
+</div>
+
+<div id="map"></div>
+
+<script>
+const map = L.map('map').setView([1.3521, 103.8198], 12);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '&copy; OpenStreetMap contributors',
+  maxZoom: 19
+}).addTo(map);
+
+const startInput = { lat: document.getElementById('start-lat'), lng: document.getElementById('start-lng') };
+const endInput = { lat: document.getElementById('end-lat'), lng: document.getElementById('end-lng') };
+const compareBtn = document.getElementById('compare-btn');
+const resultsDiv = document.getElementById('results');
+
+let startMarker = null;
+let endMarker = null;
+let mrLine = null;
+let orsLine = null;
+let googleLine = null;
+let clickState = 'start'; // 'start' or 'end'
+
+const greenIcon = L.icon({
+  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-green.png',
+  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+  iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41]
+});
+
+const redIcon = L.icon({
+  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png',
+  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+  iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41]
+});
+
+function setMarker(latlng, type) {
+  const icon = type === 'start' ? greenIcon : redIcon;
+  const label = type === 'start' ? 'Start' : 'End';
+  const inputs = type === 'start' ? startInput : endInput;
+
+  if (type === 'start' && startMarker) map.removeLayer(startMarker);
+  if (type === 'end' && endMarker) map.removeLayer(endMarker);
+
+  const marker = L.marker(latlng, { icon, draggable: true }).addTo(map).bindPopup(label);
+
+  marker.on('dragend', function () {
+    const pos = marker.getLatLng();
+    inputs.lat.value = pos.lat.toFixed(6);
+    inputs.lng.value = pos.lng.toFixed(6);
+  });
+
+  if (type === 'start') startMarker = marker;
+  else endMarker = marker;
+
+  inputs.lat.value = latlng.lat.toFixed(6);
+  inputs.lng.value = latlng.lng.toFixed(6);
+}
+
+map.on('click', function (e) {
+  if (clickState === 'start') {
+    setMarker(e.latlng, 'start');
+    clickState = 'end';
+  } else {
+    setMarker(e.latlng, 'end');
+    clickState = 'start';
+  }
+});
+
+function clearRoutes() {
+  if (mrLine) { map.removeLayer(mrLine); mrLine = null; }
+  if (orsLine) { map.removeLayer(orsLine); orsLine = null; }
+  if (googleLine) { map.removeLayer(googleLine); googleLine = null; }
+}
+
+function formatDistance(m) {
+  if (m >= 1000) return (m / 1000).toFixed(2) + ' km';
+  return m.toFixed(0) + ' m';
+}
+
+compareBtn.addEventListener('click', async function () {
+  const start = { lat: parseFloat(startInput.lat.value), lng: parseFloat(startInput.lng.value) };
+  const end = { lat: parseFloat(endInput.lat.value), lng: parseFloat(endInput.lng.value) };
+
+  if (isNaN(start.lat) || isNaN(start.lng) || isNaN(end.lat) || isNaN(end.lng)) {
+    alert('Please set both start and end coordinates.');
+    return;
+  }
+
+  compareBtn.disabled = true;
+  compareBtn.textContent = 'Comparing...';
+  clearRoutes();
+
+  try {
+    const resp = await fetch('/api/compare', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ start, end })
+    });
+    const data = await resp.json();
+
+    resultsDiv.style.display = 'flex';
+
+    const mrDiv = document.getElementById('mr-result');
+    const orsDiv = document.getElementById('ors-result');
+    const googleDiv = document.getElementById('google-result');
+    const diffDiv = document.getElementById('diff-line');
+
+    // map_router result
+    if (data.map_router.error) {
+      mrDiv.innerHTML = '<div class="error">' + escapeHtml(data.map_router.error) + '</div>';
+    } else {
+      mrDiv.innerHTML = '<div class="distance">' + formatDistance(data.map_router.distance_meters) + '</div>'
+        + '<div class="latency">' + data.map_router.latency_ms + ' ms</div>';
+      mrLine = L.polyline(data.map_router.geometry, { color: '#2196F3', weight: 5, opacity: 0.8 }).addTo(map);
+    }
+
+    // ORS result
+    if (data.ors.error) {
+      orsDiv.innerHTML = '<div class="error">' + escapeHtml(data.ors.error) + '</div>';
+    } else {
+      orsDiv.innerHTML = '<div class="distance">' + formatDistance(data.ors.distance_meters) + '</div>'
+        + '<div class="latency">' + data.ors.latency_ms + ' ms</div>';
+      orsLine = L.polyline(data.ors.geometry, { color: '#F44336', weight: 5, opacity: 0.8 }).addTo(map);
+    }
+
+    // Google result
+    if (data.google.error) {
+      googleDiv.innerHTML = '<div class="error">' + escapeHtml(data.google.error) + '</div>';
+    } else {
+      googleDiv.innerHTML = '<div class="distance">' + formatDistance(data.google.distance_meters) + '</div>'
+        + '<div class="latency">' + data.google.latency_ms + ' ms</div>';
+      googleLine = L.polyline(data.google.geometry, { color: '#4CAF50', weight: 5, opacity: 0.8 }).addTo(map);
+    }
+
+    // Difference table
+    const distances = [
+      { name: 'map_router', d: data.map_router.error ? null : data.map_router.distance_meters },
+      { name: 'ORS', d: data.ors.error ? null : data.ors.distance_meters },
+      { name: 'Google', d: data.google.error ? null : data.google.distance_meters }
+    ].filter(x => x.d !== null);
+
+    if (distances.length >= 2) {
+      const baseline = distances[0];
+      const lines = distances.slice(1).map(other => {
+        const diff = baseline.d - other.d;
+        const pct = ((diff / other.d) * 100).toFixed(1);
+        const sign = diff > 0 ? '+' : '';
+        return baseline.name + ' vs ' + other.name + ': ' + sign + formatDistance(diff) + ' (' + sign + pct + '%)';
+      });
+      diffDiv.innerHTML = lines.join('<br>');
+      diffDiv.style.display = '';
+    } else {
+      diffDiv.style.display = 'none';
+    }
+
+    // Fit bounds
+    const allBounds = [];
+    if (mrLine) allBounds.push(mrLine.getBounds());
+    if (orsLine) allBounds.push(orsLine.getBounds());
+    if (googleLine) allBounds.push(googleLine.getBounds());
+    if (allBounds.length > 0) {
+      let bounds = allBounds[0];
+      for (let i = 1; i < allBounds.length; i++) bounds.extend(allBounds[i]);
+      map.fitBounds(bounds, { padding: [40, 40] });
+    }
+  } catch (err) {
+    alert('Request failed: ' + err.message);
+  } finally {
+    compareBtn.disabled = false;
+    compareBtn.textContent = 'Compare Routes';
+  }
+});
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+</script>
+</body>
+</html>

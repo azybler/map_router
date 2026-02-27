@@ -26,13 +26,6 @@ func NewHandlers(router routing.Router, stats StatsResponse) *Handlers {
 	}
 }
 
-// Singapore bounding box.
-const (
-	sgMinLat = 1.15
-	sgMaxLat = 1.48
-	sgMinLng = 103.6
-	sgMaxLng = 104.1
-)
 
 // HandleRoute handles POST /api/v1/route.
 func (h *Handlers) HandleRoute(w http.ResponseWriter, r *http.Request) {
@@ -118,8 +111,8 @@ func validateCoord(ll LatLngJSON, field string) error {
 	if math.IsNaN(ll.Lat) || math.IsNaN(ll.Lng) || math.IsInf(ll.Lat, 0) || math.IsInf(ll.Lng, 0) {
 		return errors.New("coordinates must be finite numbers")
 	}
-	if ll.Lat < sgMinLat || ll.Lat > sgMaxLat || ll.Lng < sgMinLng || ll.Lng > sgMaxLng {
-		return errors.New("coordinates outside Singapore bounding box")
+	if ll.Lat < -90 || ll.Lat > 90 || ll.Lng < -180 || ll.Lng > 180 {
+		return errors.New("coordinates out of range")
 	}
 	return nil
 }

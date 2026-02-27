@@ -1,12 +1,15 @@
-.PHONY: build build-preprocess build-server test bench vet clean
+.PHONY: build build-preprocess build-server build-visualize test bench vet clean
 
-build: build-preprocess build-server
+build: build-preprocess build-server build-visualize
 
 build-preprocess:
 	go build -o bin/preprocess ./cmd/preprocess
 
 build-server:
 	go build -o bin/server ./cmd/server
+
+build-visualize:
+	go build -o bin/visualize ./cmd/visualize
 
 test:
 	go test ./... -timeout 60s

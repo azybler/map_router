@@ -92,8 +92,8 @@ func TestHandleRoute_MissingContentType(t *testing.T) {
 func TestHandleRoute_OutOfBounds(t *testing.T) {
 	h := NewHandlers(&mockRouter{}, StatsResponse{})
 
-	// London coordinates (outside Singapore bbox).
-	body := `{"start":{"lat":51.5,"lng":-0.1},"end":{"lat":1.35,"lng":103.85}}`
+	// Latitude out of valid range (-90 to 90).
+	body := `{"start":{"lat":91.0,"lng":103.8},"end":{"lat":1.35,"lng":103.85}}`
 	req := httptest.NewRequest("POST", "/api/v1/route", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
