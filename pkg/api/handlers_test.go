@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"map_router/pkg/routing"
+	"github.com/azybler/map_router/pkg/routing"
 )
 
 // mockRouter implements routing.Router for testing.

@@ -1,6 +1,6 @@
 package routing
 
-import "map_router/pkg/graph"
+import "github.com/azybler/map_router/pkg/graph"
 
 const maxUnpackDepth = 200
 

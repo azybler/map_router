@@ -5,7 +5,7 @@ import (
 
 	"github.com/paulmach/osm"
 
-	osmparser "map_router/pkg/osm"
+	osmparser "github.com/azybler/map_router/pkg/osm"
 )
 
 func TestBuildSimpleGraph(t *testing.T) {

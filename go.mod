@@ -1,4 +1,4 @@
-module map_router
+module github.com/azybler/map_router
 
 go 1.26.0
 

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"map_router/pkg/geo"
+	"github.com/azybler/map_router/pkg/geo"
 	"math"
 
 	"github.com/paulmach/osm"

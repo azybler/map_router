@@ -8,7 +8,7 @@ import (
 	"mime"
 	"net/http"
 
-	"map_router/pkg/routing"
+	"github.com/azybler/map_router/pkg/routing"
 )
 
 // Handlers holds the HTTP handlers and their dependencies.

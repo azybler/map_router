@@ -5,8 +5,8 @@ import (
 	"math"
 	"sort"
 
-	"map_router/pkg/geo"
-	"map_router/pkg/graph"
+	"github.com/azybler/map_router/pkg/geo"
+	"github.com/azybler/map_router/pkg/graph"
 )
 
 const maxSnapDistMeters = 500.0

@@ -3,7 +3,7 @@ package ch
 import (
 	"log"
 
-	"map_router/pkg/graph"
+	"github.com/azybler/map_router/pkg/graph"
 )
 
 // maxShortcutsPerNode is the limit on shortcuts a single contraction can create.

@@ -8,9 +8,9 @@ import (
 	"os"
 	"time"
 
-	"map_router/pkg/ch"
-	"map_router/pkg/graph"
-	osmparser "map_router/pkg/osm"
+	"github.com/azybler/map_router/pkg/ch"
+	"github.com/azybler/map_router/pkg/graph"
+	osmparser "github.com/azybler/map_router/pkg/osm"
 )
 
 func main() {

@@ -6,8 +6,8 @@ import (
 
 	"github.com/paulmach/osm"
 
-	"map_router/pkg/graph"
-	osmparser "map_router/pkg/osm"
+	"github.com/azybler/map_router/pkg/graph"
+	osmparser "github.com/azybler/map_router/pkg/osm"
 )
 
 // buildTestGraph creates a small graph for testing:

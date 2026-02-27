@@ -6,7 +6,7 @@ import (
 	"math"
 	"sync"
 
-	"map_router/pkg/graph"
+	"github.com/azybler/map_router/pkg/graph"
 )
 
 // ErrNoRoute is returned when no route exists between the two points.

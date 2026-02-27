@@ -9,9 +9,9 @@ import (
 	"runtime/debug"
 	"time"
 
-	"map_router/pkg/api"
-	"map_router/pkg/graph"
-	"map_router/pkg/routing"
+	"github.com/azybler/map_router/pkg/api"
+	"github.com/azybler/map_router/pkg/graph"
+	"github.com/azybler/map_router/pkg/routing"
 )
 
 func main() {
