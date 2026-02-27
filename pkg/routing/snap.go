@@ -6,8 +6,6 @@ import (
 
 	"map_router/pkg/geo"
 	"map_router/pkg/graph"
-
-	"github.com/tidwall/rtree"
 )
 
 const maxSnapDistMeters = 500.0
@@ -24,99 +22,107 @@ type SnapResult struct {
 	Dist    float64 // distance in meters from query point to snapped point
 }
 
-// Snapper provides nearest-road snapping using an R-tree spatial index.
-type Snapper struct {
-	tree *rtree.RTreeG[uint32]
-	g    *graph.Graph
+// Grid cell size in degrees. 0.01° ≈ 1.1 km at the equator.
+// A 3×3 cell search covers ±1.1 km, well over the 500 m max snap distance.
+const gridCellSize = 0.01
+
+// snapEdge stores an edge index with its precomputed source node,
+// avoiding an O(log N) binary search per candidate during snap queries.
+type snapEdge struct {
+	edgeIdx uint32
+	source  uint32
 }
 
-// NewSnapper builds an R-tree from the original graph's edges.
+// Snapper provides nearest-road snapping using a flat spatial grid index.
+type Snapper struct {
+	cells map[uint64][]snapEdge // cellKey → edges with precomputed sources
+	g     *graph.Graph
+}
+
+// gridCell returns the integer cell coordinates for a lat/lon.
+func gridCell(lat, lon float64) (latIdx, lonIdx int32) {
+	return int32(math.Floor(lat / gridCellSize)), int32(math.Floor(lon / gridCellSize))
+}
+
+// cellKey packs two int32 cell indices into a single uint64 map key.
+func cellKey(latIdx, lonIdx int32) uint64 {
+	return uint64(uint32(latIdx))<<32 | uint64(uint32(lonIdx))
+}
+
+// NewSnapper builds a spatial grid index from the original graph's edges.
 func NewSnapper(g *graph.Graph) *Snapper {
-	var tree rtree.RTreeG[uint32]
+	cells := make(map[uint64][]snapEdge, g.NumEdges/64)
 
 	for u := uint32(0); u < g.NumNodes; u++ {
 		start, end := g.EdgesFrom(u)
 		for e := start; e < end; e++ {
 			v := g.Head[e]
-			// Bounding box of segment (u, v).
-			minLat := math.Min(g.NodeLat[u], g.NodeLat[v])
-			maxLat := math.Max(g.NodeLat[u], g.NodeLat[v])
-			minLon := math.Min(g.NodeLon[u], g.NodeLon[v])
-			maxLon := math.Max(g.NodeLon[u], g.NodeLon[v])
-			tree.Insert([2]float64{minLon, minLat}, [2]float64{maxLon, maxLat}, e)
+
+			uLat, uLon := g.NodeLat[u], g.NodeLon[u]
+			vLat, vLon := g.NodeLat[v], g.NodeLon[v]
+
+			// Bounding box of segment endpoints.
+			minLat := math.Min(uLat, vLat)
+			maxLat := math.Max(uLat, vLat)
+			minLon := math.Min(uLon, vLon)
+			maxLon := math.Max(uLon, vLon)
+
+			// Insert edge into every cell its bounding box overlaps.
+			latLo, lonLo := gridCell(minLat, minLon)
+			latHi, lonHi := gridCell(maxLat, maxLon)
+
+			se := snapEdge{edgeIdx: e, source: u}
+			for la := latLo; la <= latHi; la++ {
+				for lo := lonLo; lo <= lonHi; lo++ {
+					key := cellKey(la, lo)
+					cells[key] = append(cells[key], se)
+				}
+			}
 		}
 	}
 
-	return &Snapper{tree: &tree, g: g}
+	return &Snapper{cells: cells, g: g}
 }
 
 // Snap finds the nearest road segment to the given lat/lng.
 func (s *Snapper) Snap(lat, lng float64) (SnapResult, error) {
+	centerLat, centerLon := gridCell(lat, lng)
+
 	bestDist := math.Inf(1)
 	var bestResult SnapResult
-	found := false
 
-	// BoxDist returns squared-degree distance. Convert our meter threshold
-	// to squared degrees for comparison. 1° ≈ 111,320 m.
-	const metersPerDeg = 111_320.0
-	maxSnapDeg := maxSnapDistMeters / metersPerDeg
-	maxSnapDegSq := maxSnapDeg * maxSnapDeg
+	// Search 3×3 grid of cells around the query point.
+	for dLat := int32(-1); dLat <= 1; dLat++ {
+		for dLon := int32(-1); dLon <= 1; dLon++ {
+			key := cellKey(centerLat+dLat, centerLon+dLon)
+			for _, se := range s.cells[key] {
+				u := se.source
+				v := s.g.Head[se.edgeIdx]
 
-	// Use Nearby to get candidates in approximate distance order.
-	s.tree.Nearby(
-		rtree.BoxDist[float64, uint32]([2]float64{lng, lat}, [2]float64{lng, lat}, nil),
-		func(min, max [2]float64, edgeIdx uint32, dist float64) bool {
-			// Find the edge's source node by scanning (reverse lookup).
-			u := s.findSource(edgeIdx)
-			v := s.g.Head[edgeIdx]
+				exactDist, ratio := geo.PointToSegmentDist(
+					lat, lng,
+					s.g.NodeLat[u], s.g.NodeLon[u],
+					s.g.NodeLat[v], s.g.NodeLon[v],
+				)
 
-			exactDist, ratio := geo.PointToSegmentDist(
-				lat, lng,
-				s.g.NodeLat[u], s.g.NodeLon[u],
-				s.g.NodeLat[v], s.g.NodeLon[v],
-			)
-
-			if exactDist < bestDist {
-				bestDist = exactDist
-				bestResult = SnapResult{
-					EdgeIdx: edgeIdx,
-					NodeU:   u,
-					NodeV:   v,
-					Ratio:   ratio,
-					Dist:    exactDist,
+				if exactDist < bestDist {
+					bestDist = exactDist
+					bestResult = SnapResult{
+						EdgeIdx: se.edgeIdx,
+						NodeU:   u,
+						NodeV:   v,
+						Ratio:   ratio,
+						Dist:    exactDist,
+					}
 				}
-				found = true
 			}
+		}
+	}
 
-			if found && bestDist <= maxSnapDistMeters {
-				// Convert bestDist (meters) to squared degrees for R-tree comparison.
-				bestDeg := bestDist / metersPerDeg
-				return dist <= bestDeg*bestDeg*2.25 // 1.5x margin squared
-			}
-
-			// Haven't found a good candidate yet — stop if box dist exceeds max snap range.
-			return dist <= maxSnapDegSq*4
-		},
-	)
-
-	if !found || bestDist > maxSnapDistMeters {
+	if bestDist > maxSnapDistMeters {
 		return SnapResult{}, ErrPointTooFar
 	}
 
 	return bestResult, nil
 }
 
-// findSource finds the source node for edge at index edgeIdx.
-func (s *Snapper) findSource(edgeIdx uint32) uint32 {
-	// Binary search in FirstOut to find which node owns this edge.
-	lo, hi := uint32(0), s.g.NumNodes
-	for lo < hi {
-		mid := (lo + hi) / 2
-		if s.g.FirstOut[mid+1] <= edgeIdx {
-			lo = mid + 1
-		} else {
-			hi = mid
-		}
-	}
-	return lo
-}

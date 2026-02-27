@@ -132,7 +132,7 @@ func (e *Engine) Route(ctx context.Context, start, end LatLng) (*RouteResult, er
 // source seed → meetNode → target seed.
 func (e *Engine) reconstructOverlayPath(meetNode uint32, predFwd, predBwd []uint32) []uint32 {
 	// Forward path: meetNode ← ... ← source seed (trace backwards, then reverse).
-	var fwdPath []uint32
+	fwdPath := make([]uint32, 0, 16)
 	node := meetNode
 	for {
 		fwdPath = append(fwdPath, node)
@@ -170,7 +170,8 @@ func (e *Engine) buildGeometry(nodes []uint32) []LatLng {
 	}
 
 	g := e.origGraph
-	var geom []LatLng
+	// Estimate ~2 geometry points per node (node + avg shape points).
+	geom := make([]LatLng, 0, len(nodes)*2)
 
 	// Add first node.
 	geom = append(geom, LatLng{Lat: g.NodeLat[nodes[0]], Lng: g.NodeLon[nodes[0]]})
@@ -248,87 +249,85 @@ func (e *Engine) runCHDijkstra(ctx context.Context, qs *QueryState) (uint32, uin
 	mu := uint32(math.MaxUint32)
 	meetNode := noNode
 
-	iterations := 0
+	iterations := uint32(0)
 
-	for qs.FwdPQ.Len() > 0 || qs.BwdPQ.Len() > 0 {
-		// Check context cancellation periodically.
+	for {
+		// PeekDist returns MaxUint32 for empty PQ, so this also handles
+		// the empty-queue case without separate Len() checks.
+		fwdMin := qs.FwdPQ.PeekDist()
+		bwdMin := qs.BwdPQ.PeekDist()
+		if fwdMin >= mu && bwdMin >= mu {
+			break
+		}
+
+		// Check context cancellation periodically (bitmask avoids modulo).
 		iterations++
-		if iterations%100 == 0 {
+		if iterations&255 == 0 {
 			if ctx.Err() != nil {
 				return mu, meetNode
 			}
 		}
 
 		// Forward step.
-		if qs.FwdPQ.Len() > 0 && qs.FwdPQ.PeekDist() < mu {
+		if fwdMin < mu {
 			item := qs.FwdPQ.Pop()
 			u := item.Node
 			d := item.Dist
 
-			if d > qs.DistFwd[u] {
-				goto backward // stale entry
-			}
-
-			// Check meet condition.
-			if qs.DistBwd[u] < math.MaxUint32 {
-				candidate := d + qs.DistBwd[u]
-				if candidate < mu {
-					mu = candidate
-					meetNode = u
+			if d <= qs.DistFwd[u] {
+				// Check meet condition.
+				if qs.DistBwd[u] < math.MaxUint32 {
+					candidate := d + qs.DistBwd[u]
+					if candidate < mu {
+						mu = candidate
+						meetNode = u
+					}
 				}
-			}
 
-			// Relax forward upward edges.
-			fStart := e.chg.FwdFirstOut[u]
-			fEnd := e.chg.FwdFirstOut[u+1]
-			for ei := fStart; ei < fEnd; ei++ {
-				v := e.chg.FwdHead[ei]
-				newDist := d + e.chg.FwdWeight[ei]
-				if newDist < qs.DistFwd[v] {
-					qs.touchFwd(v, newDist)
-					qs.FwdPQ.Push(v, newDist)
-					qs.PredFwd[v] = u
+				// Relax forward upward edges.
+				fStart := e.chg.FwdFirstOut[u]
+				fEnd := e.chg.FwdFirstOut[u+1]
+				for ei := fStart; ei < fEnd; ei++ {
+					v := e.chg.FwdHead[ei]
+					newDist := d + e.chg.FwdWeight[ei]
+					if newDist < qs.DistFwd[v] {
+						qs.touchFwd(v, newDist)
+						qs.FwdPQ.Push(v, newDist)
+						qs.PredFwd[v] = u
+					}
 				}
 			}
 		}
 
-	backward:
-		// Backward step.
-		if qs.BwdPQ.Len() > 0 && qs.BwdPQ.PeekDist() < mu {
+		// Re-check backward min against (potentially updated) mu.
+		if qs.BwdPQ.PeekDist() < mu {
 			item := qs.BwdPQ.Pop()
 			u := item.Node
 			d := item.Dist
 
-			if d > qs.DistBwd[u] {
-				continue // stale entry
-			}
+			if d <= qs.DistBwd[u] {
+				// Check meet condition.
+				if qs.DistFwd[u] < math.MaxUint32 {
+					candidate := qs.DistFwd[u] + d
+					if candidate < mu {
+						mu = candidate
+						meetNode = u
+					}
+				}
 
-			// Check meet condition.
-			if qs.DistFwd[u] < math.MaxUint32 {
-				candidate := qs.DistFwd[u] + d
-				if candidate < mu {
-					mu = candidate
-					meetNode = u
+				// Relax backward upward edges.
+				bStart := e.chg.BwdFirstOut[u]
+				bEnd := e.chg.BwdFirstOut[u+1]
+				for ei := bStart; ei < bEnd; ei++ {
+					v := e.chg.BwdHead[ei]
+					newDist := d + e.chg.BwdWeight[ei]
+					if newDist < qs.DistBwd[v] {
+						qs.touchBwd(v, newDist)
+						qs.BwdPQ.Push(v, newDist)
+						qs.PredBwd[v] = u
+					}
 				}
 			}
-
-			// Relax backward upward edges.
-			bStart := e.chg.BwdFirstOut[u]
-			bEnd := e.chg.BwdFirstOut[u+1]
-			for ei := bStart; ei < bEnd; ei++ {
-				v := e.chg.BwdHead[ei]
-				newDist := d + e.chg.BwdWeight[ei]
-				if newDist < qs.DistBwd[v] {
-					qs.touchBwd(v, newDist)
-					qs.BwdPQ.Push(v, newDist)
-					qs.PredBwd[v] = u
-				}
-			}
-		}
-
-		// Termination check.
-		if qs.FwdPQ.PeekDist() >= mu && qs.BwdPQ.PeekDist() >= mu {
-			break
 		}
 	}
 

@@ -53,9 +53,11 @@ func TestBinaryRoundTrip(t *testing.T) {
 		if loaded.NodeLat[i] != original.NodeLat[i] {
 			t.Errorf("NodeLat[%d]: got %f, want %f", i, loaded.NodeLat[i], original.NodeLat[i])
 		}
-		if loaded.Rank[i] != original.Rank[i] {
-			t.Errorf("Rank[%d]: got %d, want %d", i, loaded.Rank[i], original.Rank[i])
-		}
+	}
+
+	// Rank is skipped during ReadBinary (only needed for preprocessing).
+	if loaded.Rank != nil {
+		t.Errorf("Rank should be nil after ReadBinary, got len=%d", len(loaded.Rank))
 	}
 
 	if len(loaded.FwdHead) != len(original.FwdHead) {

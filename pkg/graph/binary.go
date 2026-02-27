@@ -194,8 +194,9 @@ func ReadBinary(path string) (*CHGraph, error) {
 	if result.NodeLon, err = readFloat64Slice(r, int(hdr.NumNodes)); err != nil {
 		return nil, fmt.Errorf("read NodeLon: %w", err)
 	}
-	if result.Rank, err = readUint32Slice(r, int(hdr.NumNodes)); err != nil {
-		return nil, fmt.Errorf("read Rank: %w", err)
+	// Skip Rank (only used during preprocessing, not at query time).
+	if err := skipBytes(r, int(hdr.NumNodes)*4); err != nil {
+		return nil, fmt.Errorf("skip Rank: %w", err)
 	}
 
 	// Forward upward graph.
@@ -281,6 +282,23 @@ func validateCSR(firstOut, head []uint32, numNodes uint32) error {
 		if h >= numNodes {
 			return fmt.Errorf("Head[%d]=%d >= NumNodes=%d", i, h, numNodes)
 		}
+	}
+	return nil
+}
+
+// skipBytes reads and discards n bytes from r.
+// Used to skip fields that are written for format compatibility but not needed at runtime.
+func skipBytes(r io.Reader, n int) error {
+	var buf [32 * 1024]byte
+	for n > 0 {
+		toRead := n
+		if toRead > len(buf) {
+			toRead = len(buf)
+		}
+		if _, err := io.ReadFull(r, buf[:toRead]); err != nil {
+			return err
+		}
+		n -= toRead
 	}
 	return nil
 }

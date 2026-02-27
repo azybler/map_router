@@ -43,35 +43,42 @@ func (h *MinHeap) Reset() {
 	h.items = h.items[:0]
 }
 
+// siftUp uses hole-sift: saves the floating item and does 1 assignment per
+// level instead of 3 (swap).
 func (h *MinHeap) siftUp(i int) {
+	item := h.items[i]
 	for i > 0 {
 		parent := (i - 1) / 2
-		if h.items[i].Dist >= h.items[parent].Dist {
+		if item.Dist >= h.items[parent].Dist {
 			break
 		}
-		h.items[i], h.items[parent] = h.items[parent], h.items[i]
+		h.items[i] = h.items[parent]
 		i = parent
 	}
+	h.items[i] = item
 }
 
+// siftDown uses hole-sift: saves the floating item and does 1 assignment per
+// level instead of 3 (swap).
 func (h *MinHeap) siftDown(i int) {
 	n := len(h.items)
+	item := h.items[i]
 	for {
-		smallest := i
-		left := 2*i + 1
-		right := 2*i + 2
-		if left < n && h.items[left].Dist < h.items[smallest].Dist {
-			smallest = left
-		}
-		if right < n && h.items[right].Dist < h.items[smallest].Dist {
-			smallest = right
-		}
-		if smallest == i {
+		child := 2*i + 1
+		if child >= n {
 			break
 		}
-		h.items[i], h.items[smallest] = h.items[smallest], h.items[i]
-		i = smallest
+		// Pick the smaller child.
+		if right := child + 1; right < n && h.items[right].Dist < h.items[child].Dist {
+			child = right
+		}
+		if item.Dist <= h.items[child].Dist {
+			break
+		}
+		h.items[i] = h.items[child]
+		i = child
 	}
+	h.items[i] = item
 }
 
 // QueryState holds per-query state for bidirectional CH Dijkstra.

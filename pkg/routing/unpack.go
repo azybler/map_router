@@ -8,59 +8,48 @@ const noNode = ^uint32(0) // sentinel for "no node"
 
 // unpackOverlayPath takes a sequence of overlay-level nodes and unpacks all
 // shortcut hops into original-graph node sequences.
+// Uses a single pre-allocated stack across all hops to avoid per-hop allocations.
 func unpackOverlayPath(chg *graph.CHGraph, overlayNodes []uint32) []uint32 {
 	if len(overlayNodes) < 2 {
 		return overlayNodes
 	}
 
-	var result []uint32
-	result = append(result, overlayNodes[0])
-
-	for i := 0; i < len(overlayNodes)-1; i++ {
-		unpacked := unpackHop(chg, overlayNodes[i], overlayNodes[i+1])
-		// Skip first node (already in result) to avoid duplication.
-		if len(unpacked) > 1 {
-			result = append(result, unpacked[1:]...)
-		}
-	}
-
-	return result
-}
-
-// unpackHop iteratively unpacks a single overlay hop from→to into a sequence
-// of original-graph nodes. Uses an explicit stack to avoid recursion.
-func unpackHop(chg *graph.CHGraph, from, to uint32) []uint32 {
-	type item struct {
+	type stackItem struct {
 		from, to uint32
 		depth    int
 	}
 
-	stack := []item{{from, to, 0}}
-	var result []uint32
+	result := make([]uint32, 1, len(overlayNodes)*8)
+	result[0] = overlayNodes[0]
+	stack := make([]stackItem, 0, 32)
 
-	for len(stack) > 0 {
-		it := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
+	for i := 0; i < len(overlayNodes)-1; i++ {
+		stack = append(stack[:0], stackItem{overlayNodes[i], overlayNodes[i+1], 0})
 
-		if it.depth > maxUnpackDepth {
-			continue // safety bound
-		}
+		for len(stack) > 0 {
+			it := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
 
-		middle := findMiddle(chg, it.from, it.to)
-		if middle < 0 {
-			// Original edge — append nodes.
-			if len(result) == 0 || result[len(result)-1] != it.from {
-				result = append(result, it.from)
+			if it.depth > maxUnpackDepth {
+				continue // safety bound
 			}
-			result = append(result, it.to)
-			continue
-		}
 
-		m := uint32(middle)
-		// Push right half first (m→to), then left half (from→m),
-		// so left is processed first (LIFO).
-		stack = append(stack, item{m, it.to, it.depth + 1})
-		stack = append(stack, item{it.from, m, it.depth + 1})
+			middle := findMiddle(chg, it.from, it.to)
+			if middle < 0 {
+				// Original edge — append nodes, avoiding duplication.
+				if result[len(result)-1] != it.from {
+					result = append(result, it.from)
+				}
+				result = append(result, it.to)
+				continue
+			}
+
+			m := uint32(middle)
+			// Push right half first (m→to), then left half (from→m),
+			// so left is processed first (LIFO).
+			stack = append(stack, stackItem{m, it.to, it.depth + 1})
+			stack = append(stack, stackItem{it.from, m, it.depth + 1})
+		}
 	}
 
 	return result

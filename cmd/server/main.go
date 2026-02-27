@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"runtime"
+	"runtime/debug"
 	"time"
 
 	"map_router/pkg/api"
@@ -44,8 +46,14 @@ func main() {
 	}
 
 	// Build routing engine.
-	log.Println("Building R-tree spatial index...")
+	log.Println("Building spatial index...")
 	engine := routing.NewEngine(chg, origGraph)
+
+	// Reclaim memory from init-time temporaries. Without this, Go's heap
+	// retains peak RSS from index construction (GC doubles heap each cycle:
+	// 120→240→480→960→1920 MB). This returns unused pages to the OS.
+	runtime.GC()
+	debug.FreeOSMemory()
 
 	loadTime := time.Since(start)
 	log.Printf("Ready in %s", loadTime.Round(time.Millisecond))

@@ -18,16 +18,20 @@ func main() {
 	output := flag.String("output", "graph.bin", "Output binary graph file path")
 	bbox := flag.String("bbox", "", "Bounding box filter: minLat,minLng,maxLat,maxLng (e.g. 1.15,103.6,1.48,104.1)")
 	singapore := flag.Bool("singapore", false, "Shortcut for --bbox 1.15,103.6,1.48,104.1 (Singapore bounding box)")
+	kl := flag.Bool("kl", false, "Shortcut for --bbox 2.75,101.2,3.5,102.0 (Selangor + Kuala Lumpur bounding box)")
 	flag.Parse()
 
 	if *input == "" {
-		fmt.Fprintln(os.Stderr, "Usage: preprocess --input <file.osm.pbf> [--output graph.bin] [--singapore | --bbox minLat,minLng,maxLat,maxLng]")
+		fmt.Fprintln(os.Stderr, "Usage: preprocess --input <file.osm.pbf> [--output graph.bin] [--singapore | --kl | --bbox minLat,minLng,maxLat,maxLng]")
 		os.Exit(1)
 	}
 
 	// Parse bbox option.
 	var opts osmparser.ParseOptions
-	if *singapore {
+	if *kl {
+		opts.BBox = osmparser.BBox{MinLat: 2.75, MaxLat: 3.5, MinLng: 101.2, MaxLng: 102.0}
+		log.Println("Using Selangor + KL bounding box filter: lat [2.75, 3.50], lng [101.20, 102.00]")
+	} else if *singapore {
 		opts.BBox = osmparser.BBox{MinLat: 1.15, MaxLat: 1.48, MinLng: 103.6, MaxLng: 104.1}
 		log.Println("Using Singapore bounding box filter: lat [1.15, 1.48], lng [103.6, 104.1]")
 	} else if *bbox != "" {
