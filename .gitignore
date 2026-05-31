@@ -14,11 +14,11 @@ go.work
 go.work.sum
 
 # Output files
-*.bin
+graph.bin
+graph.bin.bak
 
 # OSM data
-*.osm.pbf
-*.osm
+malaysia-singapore-brunei-latest.osm.pbf
 
 # IDE
 .idea/

@@ -53,41 +53,120 @@ func (uf *UnionFind) Union(x, y uint32) bool {
 }
 
 // LargestComponent returns the node indices belonging to the largest
-// weakly connected component (treating the directed graph as undirected).
+// strongly connected component (SCC) of the directed graph.
+//
+// Routing requires strong connectivity: every node in the returned set must be
+// able to reach every other node while respecting edge direction (one-way
+// streets). A weakly connected component (treating the graph as undirected)
+// would retain nodes reachable in only one direction — e.g. the dead-end of a
+// one-way street with no path back. When the snapper later snaps a query
+// endpoint onto such a node, routes to or from that point fail with
+// "no route found" even though the road is reachable in reality.
+//
+// Uses iterative Kosaraju's algorithm (two linear passes over the graph and its
+// transpose) for O(V+E) time without recursion, which would overflow the stack
+// on a million-node graph.
 func LargestComponent(g *Graph) []uint32 {
-	if g.NumNodes == 0 {
+	n := g.NumNodes
+	if n == 0 {
 		return nil
 	}
 
-	uf := NewUnionFind(g.NumNodes)
-
-	// Union all edges (both directions treated as undirected).
-	for u := uint32(0); u < g.NumNodes; u++ {
-		start, end := g.EdgesFrom(u)
-		for e := start; e < end; e++ {
-			uf.Union(u, g.Head[e])
+	// Build the transpose (reverse) adjacency in CSR form.
+	revFirstOut := make([]uint32, n+1)
+	for _, v := range g.Head {
+		revFirstOut[v+1]++
+	}
+	for i := uint32(1); i <= n; i++ {
+		revFirstOut[i] += revFirstOut[i-1]
+	}
+	revHead := make([]uint32, len(g.Head))
+	fillPos := make([]uint32, n)
+	copy(fillPos, revFirstOut[:n])
+	for u := uint32(0); u < n; u++ {
+		for e := g.FirstOut[u]; e < g.FirstOut[u+1]; e++ {
+			v := g.Head[e]
+			revHead[fillPos[v]] = u
+			fillPos[v]++
 		}
 	}
 
-	// Find the representative with the largest size.
-	bestRoot := uint32(0)
-	bestSize := uint32(0)
-	for i := uint32(0); i < g.NumNodes; i++ {
-		root := uf.Find(i)
-		if uf.size[root] > bestSize {
-			bestRoot = root
-			bestSize = uf.size[root]
+	// Pass 1: iterative post-order DFS on G, recording finish order.
+	visited := make([]bool, n)
+	order := make([]uint32, 0, n)
+	type frame struct{ node, edge uint32 }
+	stack := make([]frame, 0, 1024)
+	for s := uint32(0); s < n; s++ {
+		if visited[s] {
+			continue
+		}
+		visited[s] = true
+		stack = append(stack, frame{s, g.FirstOut[s]})
+		for len(stack) > 0 {
+			top := &stack[len(stack)-1]
+			if top.edge < g.FirstOut[top.node+1] {
+				v := g.Head[top.edge]
+				top.edge++
+				if !visited[v] {
+					visited[v] = true
+					stack = append(stack, frame{v, g.FirstOut[v]})
+				}
+			} else {
+				order = append(order, top.node)
+				stack = stack[:len(stack)-1]
+			}
 		}
 	}
 
-	// Collect all nodes in the largest component.
-	nodes := make([]uint32, 0, bestSize)
-	for i := uint32(0); i < g.NumNodes; i++ {
-		if uf.Find(i) == bestRoot {
+	// Pass 2: assign SCC ids on the transpose, processing nodes in reverse
+	// finish order.
+	const unassigned = ^uint32(0)
+	comp := make([]uint32, n)
+	for i := range comp {
+		comp[i] = unassigned
+	}
+	dfs := make([]uint32, 0, 1024)
+	numComps := uint32(0)
+	for i := len(order) - 1; i >= 0; i-- {
+		root := order[i]
+		if comp[root] != unassigned {
+			continue
+		}
+		comp[root] = numComps
+		dfs = append(dfs, root)
+		for len(dfs) > 0 {
+			u := dfs[len(dfs)-1]
+			dfs = dfs[:len(dfs)-1]
+			for e := revFirstOut[u]; e < revFirstOut[u+1]; e++ {
+				w := revHead[e]
+				if comp[w] == unassigned {
+					comp[w] = numComps
+					dfs = append(dfs, w)
+				}
+			}
+		}
+		numComps++
+	}
+
+	// Find the largest SCC by node count.
+	sizes := make([]uint32, numComps)
+	for _, c := range comp {
+		sizes[c]++
+	}
+	best := uint32(0)
+	for c := uint32(1); c < numComps; c++ {
+		if sizes[c] > sizes[best] {
+			best = c
+		}
+	}
+
+	// Collect its nodes in ascending index order.
+	nodes := make([]uint32, 0, sizes[best])
+	for i := uint32(0); i < n; i++ {
+		if comp[i] == best {
 			nodes = append(nodes, i)
 		}
 	}
-
 	return nodes
 }
 

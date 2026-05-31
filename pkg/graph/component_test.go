@@ -69,6 +69,59 @@ func TestLargestComponent(t *testing.T) {
 	}
 }
 
+// TestLargestComponentStronglyConnected verifies that the routing component is
+// the largest STRONGLY connected component, not the weakly connected one.
+//
+// Regression test for a real bug: a query point snapped to node 40 (reachable
+// from the core but with no path back) returned "no route found" because the
+// graph retained one-directional nodes. Routing requires strong connectivity.
+func TestLargestComponentStronglyConnected(t *testing.T) {
+	// Core directed cycle 10->20->30->10 is strongly connected (3 nodes).
+	// Node 40 can reach the core (40->10) but the core cannot reach it.
+	// Node 50 is reachable from the core (30->50) but cannot return.
+	// All five nodes form ONE weakly connected component, but the largest
+	// strongly connected component is just the {10,20,30} cycle.
+	result := &osmparser.ParseResult{
+		Edges: []osmparser.RawEdge{
+			{FromNodeID: 10, ToNodeID: 20, Weight: 100},
+			{FromNodeID: 20, ToNodeID: 30, Weight: 100},
+			{FromNodeID: 30, ToNodeID: 10, Weight: 100},
+			{FromNodeID: 40, ToNodeID: 10, Weight: 100}, // source-only dead end
+			{FromNodeID: 30, ToNodeID: 50, Weight: 100}, // sink-only dead end
+		},
+		NodeLat: map[osm.NodeID]float64{10: 1.0, 20: 1.1, 30: 1.2, 40: 2.0, 50: 2.5},
+		NodeLon: map[osm.NodeID]float64{10: 103.0, 20: 103.1, 30: 103.2, 40: 104.0, 50: 104.5},
+	}
+
+	g := Build(result)
+	nodes := LargestComponent(g)
+
+	if len(nodes) != 3 {
+		t.Fatalf("LargestComponent has %d nodes, want 3 (the strongly connected cycle)", len(nodes))
+	}
+
+	// The one-directional dead-end nodes (lat 2.0 and 2.5) must be excluded.
+	for _, idx := range nodes {
+		if lat := g.NodeLat[idx]; lat == 2.0 || lat == 2.5 {
+			t.Errorf("node at lat %.1f is one-directional and must not be in the routing component", lat)
+		}
+	}
+
+	// Every node in the component must have at least one in-edge and one
+	// out-edge after filtering (necessary condition for strong connectivity).
+	filtered := FilterToComponent(g, nodes)
+	indeg := make([]uint32, filtered.NumNodes)
+	for _, v := range filtered.Head {
+		indeg[v]++
+	}
+	for u := uint32(0); u < filtered.NumNodes; u++ {
+		out := filtered.FirstOut[u+1] - filtered.FirstOut[u]
+		if out == 0 || indeg[u] == 0 {
+			t.Errorf("node %d in routing component has in=%d out=%d; not strongly connected", u, indeg[u], out)
+		}
+	}
+}
+
 func TestFilterToComponent(t *testing.T) {
 	result := &osmparser.ParseResult{
 		Edges: []osmparser.RawEdge{
