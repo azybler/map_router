@@ -6,6 +6,7 @@ import (
 	"math"
 	"sync"
 
+	"github.com/azybler/map_router/pkg/geo"
 	"github.com/azybler/map_router/pkg/graph"
 )
 
@@ -92,9 +93,19 @@ func (e *Engine) Route(ctx context.Context, start, end LatLng) (*RouteResult, er
 	// Step 4: Unpack shortcuts into original node sequence.
 	origNodes := unpackOverlayPath(e.chg, overlayNodes)
 
-	// Step 5: Build geometry from original node sequence.
-	totalDistMeters := float64(mu) / 1000.0
+	// Step 5: Build geometry, anchored at the actual snapped points so the
+	// partial first/last edges are included. Distance is measured from the
+	// geometry (NOT from mu), which decouples it from the routing metric.
 	geometry := e.buildGeometry(origNodes)
+	if len(origNodes) > 0 {
+		if lat, lng, ok := snapPointFor(e.origGraph, startSnap, origNodes[0]); ok {
+			geometry = append([]LatLng{{Lat: lat, Lng: lng}}, geometry...)
+		}
+		if lat, lng, ok := snapPointFor(e.origGraph, endSnap, origNodes[len(origNodes)-1]); ok {
+			geometry = append(geometry, LatLng{Lat: lat, Lng: lng})
+		}
+	}
+	totalDistMeters := polylineLengthMeters(geometry)
 
 	return &RouteResult{
 		TotalDistanceMeters: totalDistMeters,
@@ -179,6 +190,27 @@ func (e *Engine) buildGeometry(nodes []uint32) []LatLng {
 	}
 
 	return geom
+}
+
+// snapPointFor returns the interpolated snap-point coordinate on the snapped
+// edge, valid when `node` is one of that edge's endpoints (it always is — the
+// path starts/ends at a seeded endpoint).
+func snapPointFor(g *graph.Graph, snap SnapResult, node uint32) (lat, lng float64, ok bool) {
+	if node != snap.NodeU && node != snap.NodeV {
+		return 0, 0, false
+	}
+	lat = g.NodeLat[snap.NodeU] + snap.Ratio*(g.NodeLat[snap.NodeV]-g.NodeLat[snap.NodeU])
+	lng = g.NodeLon[snap.NodeU] + snap.Ratio*(g.NodeLon[snap.NodeV]-g.NodeLon[snap.NodeU])
+	return lat, lng, true
+}
+
+// polylineLengthMeters sums the great-circle length of a lat/lng polyline.
+func polylineLengthMeters(geom []LatLng) float64 {
+	var total float64
+	for i := 0; i+1 < len(geom); i++ {
+		total += geo.Haversine(geom[i].Lat, geom[i].Lng, geom[i+1].Lat, geom[i+1].Lng)
+	}
+	return total
 }
 
 // seedForward seeds the forward PQ from the start snap point, respecting edge

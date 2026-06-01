@@ -6,6 +6,7 @@ import (
 
 	"github.com/paulmach/osm"
 
+	"github.com/azybler/map_router/pkg/geo"
 	"github.com/azybler/map_router/pkg/graph"
 	osmparser "github.com/azybler/map_router/pkg/osm"
 )
@@ -117,5 +118,60 @@ func TestSeedBackwardRespectsOneWay(t *testing.T) {
 	// v (n1) must NOT be seeded — no reverse edge n1->n0 exists.
 	if qs.DistBwd[n1] != math.MaxUint32 {
 		t.Errorf("expected n1 (head) NOT to be seeded backward on a one-way edge, got %d", qs.DistBwd[n1])
+	}
+}
+
+func TestDistanceIncludesPartialEdges(t *testing.T) {
+	g, chg := buildTestGraphAndCH(t)
+	eng := NewEngine(chg, g)
+
+	// On-node: start/end land exactly on graph nodes (ratio ~0/1).
+	t.Run("on_node", func(t *testing.T) {
+		res, err := eng.Route(t.Context(),
+			LatLng{Lat: 1.300, Lng: 103.800}, LatLng{Lat: 1.301, Lng: 103.802})
+		if err != nil {
+			t.Fatalf("Route: %v", err)
+		}
+		if res.TotalDistanceMeters <= 0 {
+			t.Fatalf("expected positive distance, got %f", res.TotalDistanceMeters)
+		}
+		first := res.Segments[0].Geometry[0]
+		if d := geo.Haversine(first.Lat, first.Lng, 1.300, 103.800); d > 1.0 {
+			t.Errorf("geometry should start at the snap point; off by %.2f m", d)
+		}
+		assertDistanceEqualsPolyline(t, res)
+	})
+
+	// Mid-edge: start is the midpoint of edge (1.300,103.800)-(1.300,103.801),
+	// end is the midpoint of edge (1.301,103.801)-(1.301,103.802). Snap ratio
+	// ~0.5, so the prepended/appended snap point is ~50 m from the graph node
+	// and the reported distance must include those partial edges.
+	t.Run("partial_edge", func(t *testing.T) {
+		res, err := eng.Route(t.Context(),
+			LatLng{Lat: 1.300, Lng: 103.8005}, LatLng{Lat: 1.301, Lng: 103.8015})
+		if err != nil {
+			t.Fatalf("Route: %v", err)
+		}
+		first := res.Segments[0].Geometry[0]
+		// Snap point must be well away from the nearest graph node (mid-edge).
+		dNode := geo.Haversine(first.Lat, first.Lng, 1.300, 103.800)
+		if dNode < 10.0 {
+			t.Errorf("expected mid-edge snap point >10 m from graph node, got %.2f m", dNode)
+		}
+		assertDistanceEqualsPolyline(t, res)
+	})
+}
+
+// assertDistanceEqualsPolyline checks the reported distance equals the summed
+// great-circle length of the returned geometry.
+func assertDistanceEqualsPolyline(t *testing.T, res *RouteResult) {
+	t.Helper()
+	geom := res.Segments[0].Geometry
+	var sum float64
+	for i := 0; i+1 < len(geom); i++ {
+		sum += geo.Haversine(geom[i].Lat, geom[i].Lng, geom[i+1].Lat, geom[i+1].Lng)
+	}
+	if math.Abs(sum-res.TotalDistanceMeters) > 0.5 {
+		t.Errorf("distance %.2f != polyline length %.2f", res.TotalDistanceMeters, sum)
 	}
 }
