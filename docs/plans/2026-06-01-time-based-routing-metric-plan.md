@@ -606,26 +606,37 @@ Expected: PASS — this validates the *existing* `runCHDijkstra` already handles
 Append to `pkg/routing/engine_test.go`:
 
 ```go
-// stubGraph: a well-connected main road 0-1-2-3-4, plus an isolated stub node 5
-// joined to the network only by a long detour through node 0. A query point
-// nearest the stub must still route via the main road, not the stub.
+// stubParse: a well-connected main road A-B-C-D (lon 103.800, ~100 m apart),
+// plus a stub node S that sits ~2 m from the query point but connects to the
+// network ONLY via a far node F (~3.3 km east), so reaching the main road from
+// S costs a ~6.8 km GEOMETRIC detour (S→F→A→...). The query is nearest the
+// stub edge S-F; single-nearest snapping is forced onto it and detours, while
+// multi-candidate snapping also seeds the main road and routes directly.
 //
-//	main:  0 --1-- 1 --1-- 2 --1-- 3 --1-- 4     (two-way, weight 1 each scaled)
-//	stub:  5 --(short)-- 0  but 5 is closest to the query point
+// Distance is reported from geometry (Task A2), so the detour must be a real
+// geometric detour (via far node F) — NOT merely a high edge weight — for the
+// TotalDistanceMeters assertion below to detect it.
+//
+//	main:  A --100m-- B --100m-- C --100m-- D     (lon 103.800)
+//	stub:  S ~2 m from query;  S --~3.3km-- F --~3.3km-- A
 func stubParse() *osmparser.ParseResult {
 	return &osmparser.ParseResult{
 		Edges: []osmparser.RawEdge{
-			{FromNodeID: 1, ToNodeID: 2, Weight: 100}, {FromNodeID: 2, ToNodeID: 1, Weight: 100},
-			{FromNodeID: 2, ToNodeID: 3, Weight: 100}, {FromNodeID: 3, ToNodeID: 2, Weight: 100},
-			{FromNodeID: 3, ToNodeID: 4, Weight: 100}, {FromNodeID: 4, ToNodeID: 3, Weight: 100},
-			// stub node 5 connects only back to node 1 via a long umbilical (10000).
-			{FromNodeID: 5, ToNodeID: 1, Weight: 10000}, {FromNodeID: 1, ToNodeID: 5, Weight: 10000},
+			// main road A(100) B(200) C(300) D(400), bidirectional, ~100 m edges
+			{FromNodeID: 100, ToNodeID: 200, Weight: 100}, {FromNodeID: 200, ToNodeID: 100, Weight: 100},
+			{FromNodeID: 200, ToNodeID: 300, Weight: 100}, {FromNodeID: 300, ToNodeID: 200, Weight: 100},
+			{FromNodeID: 300, ToNodeID: 400, Weight: 100}, {FromNodeID: 400, ToNodeID: 300, Weight: 100},
+			// stub: S(500) connects only to far F(600); F connects only to A(100)
+			{FromNodeID: 500, ToNodeID: 600, Weight: 3300}, {FromNodeID: 600, ToNodeID: 500, Weight: 3300},
+			{FromNodeID: 600, ToNodeID: 100, Weight: 3300}, {FromNodeID: 100, ToNodeID: 600, Weight: 3300},
 		},
 		NodeLat: map[osm.NodeID]float64{
-			1: 1.30000, 2: 1.30090, 3: 1.30180, 4: 1.30270, 5: 1.30044,
+			100: 1.30000, 200: 1.30090, 300: 1.30180, 400: 1.30270,
+			500: 1.30093, 600: 1.30090,
 		},
 		NodeLon: map[osm.NodeID]float64{
-			1: 103.800, 2: 103.800, 3: 103.800, 4: 103.800, 5: 103.80050,
+			100: 103.80000, 200: 103.80000, 300: 103.80000, 400: 103.80000,
+			500: 103.80050, 600: 103.83000, // S ~55 m E of B; F ~3.3 km E of B
 		},
 	}
 }
@@ -635,15 +646,16 @@ func TestMultiCandidateAvoidsStub(t *testing.T) {
 	chg := chContract(t, g) // helper below
 	eng := NewEngine(chg, g)
 
-	// Query point sits nearest the stub edge (5-1) but should route to node 3
-	// via the main road, NOT via the 10 km umbilical.
+	// Query sits ~2 m from stub node S (so single-nearest snaps to the S-F edge)
+	// and ~55 m from the main road. Destination is node D on the main road.
+	// Via the stub: S→F→A→B→C→D ≈ 6.8 km. Via the main road: ≈ 250 m.
 	res, err := eng.Route(t.Context(),
-		LatLng{Lat: 1.30045, Lng: 103.80048}, // ~closest to stub node 5
-		LatLng{Lat: 1.30180, Lng: 103.800})   // node 3 on main road
+		LatLng{Lat: 1.30093, Lng: 103.80048}, // ~2 m W of stub node S
+		LatLng{Lat: 1.30270, Lng: 103.80000}) // node D on the main road
 	if err != nil {
 		t.Fatalf("Route: %v", err)
 	}
-	// Main-road distance is ~hundreds of m; a stub detour would be >10 km.
+	// Main-road route is ~hundreds of m; a stub detour via F is ~6.8 km.
 	if res.TotalDistanceMeters > 2000 {
 		t.Errorf("expected main-road route (<2 km), got %.0f m (stub detour not avoided)", res.TotalDistanceMeters)
 	}
@@ -664,7 +676,7 @@ func chContract(t *testing.T, g *graph.Graph) *graph.CHGraph {
 - [ ] **Step 4: Run test to verify it fails**
 
 Run: `go test ./pkg/routing/ -run TestMultiCandidateAvoidsStub -v`
-Expected: FAIL — current `Route` uses single-nearest `Snap`, so the query snaps to the stub edge and detours ~10 km.
+Expected: FAIL — current `Route` uses single-nearest `Snap`, so the query snaps to the stub edge S-F and detours ~6.8 km via far node F (TotalDistanceMeters > 2000).
 
 - [ ] **Step 5: Add min-seed helpers**
 
