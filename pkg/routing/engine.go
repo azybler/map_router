@@ -14,9 +14,9 @@ import (
 var ErrNoRoute = errors.New("no route found")
 
 const (
-	snapK             = 4
+	snapK             = 8
 	snapRadiusMeters  = maxSnapDistMeters // 500 m: never reject what single-nearest accepted
-	accessPenaltyMult = 1.0              // off-road distance penalty multiplier
+	accessPenaltyMult = 4.0              // off-road distance penalty multiplier
 )
 
 // accessPenalty converts the off-road snap distance into the active metric's

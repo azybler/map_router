@@ -222,10 +222,12 @@ func TestAccessPenaltyScalesWithMetric(t *testing.T) {
 		edgeIdx = i
 		break
 	}
-	// 50 m off-road snap on a 1000-units/m edge ≈ 50000 penalty.
+	// 50 m off-road snap on a ~1000-units/m edge ≈ accessPenaltyMult × 50000.
+	// Reference the constant so the test survives penalty-multiplier tuning.
 	pen := accessPenalty(g, SnapResult{EdgeIdx: edgeIdx, NodeU: 0, NodeV: 1, Ratio: 0.5, Dist: 50})
-	if pen < 45000 || pen > 55000 {
-		t.Errorf("accessPenalty = %d, want ~50000 (50 m * ~1000 units/m)", pen)
+	want := accessPenaltyMult * 50 * 1000 // Dist 50 m × ~1000 units/m
+	if float64(pen) < want*0.9 || float64(pen) > want*1.1 {
+		t.Errorf("accessPenalty = %d, want ~%.0f (mult %.1f × 50 m × ~1000 units/m)", pen, want, accessPenaltyMult)
 	}
 	// Zero-length guard: a degenerate edge yields 0, not NaN/panic.
 	gd := graph.Build(&osmparser.ParseResult{
