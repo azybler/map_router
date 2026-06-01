@@ -36,3 +36,7 @@ Thumbs.db
 .env.*
 *.pem
 *.key
+
+# Time-metric staging graph + speed-table hash sidecar
+graph.time.bin
+*.speeds.sha256
