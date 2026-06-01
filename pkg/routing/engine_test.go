@@ -206,6 +206,38 @@ func stubParse() *osmparser.ParseResult {
 	}
 }
 
+func TestAccessPenaltyScalesWithMetric(t *testing.T) {
+	// One edge of geometric length ~100 m with weight 100000 (1000 units/m).
+	g := graph.Build(&osmparser.ParseResult{
+		Edges: []osmparser.RawEdge{
+			{FromNodeID: 1, ToNodeID: 2, Weight: 100000},
+			{FromNodeID: 2, ToNodeID: 1, Weight: 100000},
+		},
+		NodeLat: map[osm.NodeID]float64{1: 1.30000, 2: 1.30090}, // ~100 m apart
+		NodeLon: map[osm.NodeID]float64{1: 103.800, 2: 103.800},
+	})
+	var edgeIdx uint32 = noNode
+	s, e := g.EdgesFrom(0)
+	for i := s; i < e; i++ {
+		edgeIdx = i
+		break
+	}
+	// 50 m off-road snap on a 1000-units/m edge ≈ 50000 penalty.
+	pen := accessPenalty(g, SnapResult{EdgeIdx: edgeIdx, NodeU: 0, NodeV: 1, Ratio: 0.5, Dist: 50})
+	if pen < 45000 || pen > 55000 {
+		t.Errorf("accessPenalty = %d, want ~50000 (50 m * ~1000 units/m)", pen)
+	}
+	// Zero-length guard: a degenerate edge yields 0, not NaN/panic.
+	gd := graph.Build(&osmparser.ParseResult{
+		Edges:   []osmparser.RawEdge{{FromNodeID: 1, ToNodeID: 2, Weight: 1}, {FromNodeID: 2, ToNodeID: 1, Weight: 1}},
+		NodeLat: map[osm.NodeID]float64{1: 1.300, 2: 1.300},
+		NodeLon: map[osm.NodeID]float64{1: 103.800, 2: 103.800},
+	})
+	if p := accessPenalty(gd, SnapResult{EdgeIdx: 0, NodeU: 0, NodeV: 1, Ratio: 0, Dist: 10}); p != 0 {
+		t.Errorf("degenerate-edge accessPenalty = %d, want 0", p)
+	}
+}
+
 func TestMultiCandidateAvoidsStub(t *testing.T) {
 	g := graph.Build(stubParse())
 	chg := chContract(t, g)

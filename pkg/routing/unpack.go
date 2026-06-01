@@ -55,23 +55,39 @@ func unpackOverlayPath(chg *graph.CHGraph, overlayNodes []uint32) []uint32 {
 	return result
 }
 
-// findMiddle looks up the middle (contracted) node for an edge from→to in the
-// CH overlay. Returns -1 if the edge is original (not a shortcut).
+// findMiddle looks up the middle (contracted) node for the edge from→to in the
+// CH overlay. Among PARALLEL overlay edges for the pair, it selects the one with
+// minimum weight — the edge the bidirectional search actually relaxed — so the
+// unpacked path matches the shortest path. Returns -1 if the pair has no overlay
+// edge (a plain original edge) OR if the cheapest overlay edge is itself original.
 //
-// The edge might be stored as:
-//   - Forward overlay edge from→to (if rank[from] < rank[to])
-//   - Backward overlay edge to→from (if rank[to] < rank[from]), representing
-//     original direction from→to
+// The edge may be stored as a forward overlay edge from→to (rank[from] <
+// rank[to]) or a backward overlay edge to→from (rank[to] < rank[from],
+// representing original direction from→to).
 func findMiddle(chg *graph.CHGraph, from, to uint32) int32 {
-	// Try forward overlay: edge from→to.
-	if edge := findEdge(chg.FwdFirstOut, chg.FwdHead, from, to); edge != noNode {
-		return chg.FwdMiddle[edge]
+	bestWeight := ^uint32(0)
+	bestMiddle := int32(-1)
+	found := false
+
+	for i := chg.FwdFirstOut[from]; i < chg.FwdFirstOut[from+1]; i++ {
+		if chg.FwdHead[i] == to && (!found || chg.FwdWeight[i] < bestWeight) {
+			bestWeight = chg.FwdWeight[i]
+			bestMiddle = chg.FwdMiddle[i]
+			found = true
+		}
 	}
-	// Try backward overlay: edge to→from (represents original from→to).
-	if edge := findEdge(chg.BwdFirstOut, chg.BwdHead, to, from); edge != noNode {
-		return chg.BwdMiddle[edge]
+	for i := chg.BwdFirstOut[to]; i < chg.BwdFirstOut[to+1]; i++ {
+		if chg.BwdHead[i] == from && (!found || chg.BwdWeight[i] < bestWeight) {
+			bestWeight = chg.BwdWeight[i]
+			bestMiddle = chg.BwdMiddle[i]
+			found = true
+		}
 	}
-	return -1
+
+	if !found {
+		return -1
+	}
+	return bestMiddle
 }
 
 // findEdge finds an edge from source to target in a CSR graph using linear scan.
