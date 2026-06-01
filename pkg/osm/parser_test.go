@@ -1,6 +1,7 @@
 package osm
 
 import (
+	"math"
 	"testing"
 
 	"github.com/paulmach/osm"
@@ -197,5 +198,19 @@ func TestDirectionFlags(t *testing.T) {
 				t.Errorf("directionFlags() = (%v, %v), want (%v, %v)", fwd, bwd, tt.wantForward, tt.wantBackward)
 			}
 		})
+	}
+}
+
+func TestEdgeWeightIsTravelTime(t *testing.T) {
+	tbl := DefaultSpeedTable()
+	speed := tbl.classSpeed("primary") // 55 km/h
+	lengthM := 1000.0
+	wantMs := lengthM / (speed / 3.6) * 1000
+	got := computeWeightMs(lengthM, speed)
+	if math.Abs(float64(got)-wantMs) > 1 {
+		t.Errorf("computeWeightMs = %d, want ~%.0f", got, wantMs)
+	}
+	if got == 0 {
+		t.Error("weight must be >= 1")
 	}
 }
