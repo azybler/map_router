@@ -40,3 +40,4 @@ Thumbs.db
 # Time-metric staging graph + speed-table hash sidecar
 graph.time.bin
 *.speeds.sha256
+/preprocess
