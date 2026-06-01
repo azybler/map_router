@@ -13,6 +13,25 @@ import (
 // ErrNoRoute is returned when no route exists between the two points.
 var ErrNoRoute = errors.New("no route found")
 
+const (
+	snapK             = 4
+	snapRadiusMeters  = maxSnapDistMeters // 500 m: never reject what single-nearest accepted
+	accessPenaltyMult = 1.0              // off-road distance penalty multiplier
+)
+
+// accessPenalty converts the off-road snap distance into the active metric's
+// units using the candidate edge's own weight/length ratio, so it auto-scales
+// whether the metric is distance (mm) or time (ms).
+func accessPenalty(g *graph.Graph, snap SnapResult) uint32 {
+	u, v := snap.NodeU, snap.NodeV
+	lenM := geo.Haversine(g.NodeLat[u], g.NodeLon[u], g.NodeLat[v], g.NodeLon[v])
+	if lenM <= 0 {
+		return 0
+	}
+	metricPerMeter := float64(g.Weight[snap.EdgeIdx]) / lenM
+	return uint32(math.Round(accessPenaltyMult * snap.Dist * metricPerMeter))
+}
+
 // LatLng represents a geographic coordinate.
 type LatLng struct {
 	Lat float64
@@ -59,14 +78,14 @@ func NewEngine(chg *graph.CHGraph, origGraph *graph.Graph) *Engine {
 
 // Route computes the shortest path between two points.
 func (e *Engine) Route(ctx context.Context, start, end LatLng) (*RouteResult, error) {
-	// Step 1: Snap points to nearest road segments.
-	startSnap, err := e.snapper.Snap(start.Lat, start.Lng)
-	if err != nil {
-		return nil, err
+	// Step 1: Snap points to nearest road segments (multi-candidate).
+	startCands := e.snapper.SnapCandidates(start.Lat, start.Lng, snapK, snapRadiusMeters)
+	if len(startCands) == 0 {
+		return nil, ErrPointTooFar
 	}
-	endSnap, err := e.snapper.Snap(end.Lat, end.Lng)
-	if err != nil {
-		return nil, err
+	endCands := e.snapper.SnapCandidates(end.Lat, end.Lng, snapK, snapRadiusMeters)
+	if len(endCands) == 0 {
+		return nil, ErrPointTooFar
 	}
 
 	// Step 2: Run bidirectional CH Dijkstra with predecessor tracking.
@@ -76,10 +95,12 @@ func (e *Engine) Route(ctx context.Context, start, end LatLng) (*RouteResult, er
 		e.qsPool.Put(qs)
 	}()
 
-	// Seed forward PQ with start snap's endpoints.
-	seedForward(qs, e.origGraph, startSnap)
-	// Seed backward PQ with end snap's endpoints.
-	seedBackward(qs, e.origGraph, endSnap)
+	for _, c := range startCands {
+		seedForward(qs, e.origGraph, c)
+	}
+	for _, c := range endCands {
+		seedBackward(qs, e.origGraph, c)
+	}
 
 	mu, meetNode := e.runCHDijkstra(ctx, qs)
 
@@ -98,10 +119,10 @@ func (e *Engine) Route(ctx context.Context, start, end LatLng) (*RouteResult, er
 	// geometry (NOT from mu), which decouples it from the routing metric.
 	geometry := e.buildGeometry(origNodes)
 	if len(origNodes) > 0 {
-		if lat, lng, ok := snapPointFor(e.origGraph, startSnap, origNodes[0]); ok {
+		if lat, lng, ok := snapPointForCandidates(e.origGraph, startCands, origNodes[0]); ok {
 			geometry = append([]LatLng{{Lat: lat, Lng: lng}}, geometry...)
 		}
-		if lat, lng, ok := snapPointFor(e.origGraph, endSnap, origNodes[len(origNodes)-1]); ok {
+		if lat, lng, ok := snapPointForCandidates(e.origGraph, endCands, origNodes[len(origNodes)-1]); ok {
 			geometry = append(geometry, LatLng{Lat: lat, Lng: lng})
 		}
 	}
@@ -192,15 +213,23 @@ func (e *Engine) buildGeometry(nodes []uint32) []LatLng {
 	return geom
 }
 
-// snapPointFor returns the interpolated snap-point coordinate on the snapped
-// edge, valid when `node` is one of that edge's endpoints (it always is — the
-// path starts/ends at a seeded endpoint).
-func snapPointFor(g *graph.Graph, snap SnapResult, node uint32) (lat, lng float64, ok bool) {
-	if node != snap.NodeU && node != snap.NodeV {
+// snapPointForCandidates returns the snap point of the nearest candidate that
+// has `node` as an endpoint (i.e. the candidate that could have seeded it).
+func snapPointForCandidates(g *graph.Graph, cands []SnapResult, node uint32) (lat, lng float64, ok bool) {
+	best := -1
+	for i := range cands {
+		if cands[i].NodeU == node || cands[i].NodeV == node {
+			if best < 0 || cands[i].Dist < cands[best].Dist {
+				best = i
+			}
+		}
+	}
+	if best < 0 {
 		return 0, 0, false
 	}
-	lat = g.NodeLat[snap.NodeU] + snap.Ratio*(g.NodeLat[snap.NodeV]-g.NodeLat[snap.NodeU])
-	lng = g.NodeLon[snap.NodeU] + snap.Ratio*(g.NodeLon[snap.NodeV]-g.NodeLon[snap.NodeU])
+	c := cands[best]
+	lat = g.NodeLat[c.NodeU] + c.Ratio*(g.NodeLat[c.NodeV]-g.NodeLat[c.NodeU])
+	lng = g.NodeLon[c.NodeU] + c.Ratio*(g.NodeLon[c.NodeV]-g.NodeLon[c.NodeU])
 	return lat, lng, true
 }
 
@@ -217,18 +246,13 @@ func polylineLengthMeters(geom []LatLng) float64 {
 // direction: travel forward to v is always legal (edge u→v exists); travel
 // backward to u is legal only if the reverse edge v→u exists.
 func seedForward(qs *QueryState, g *graph.Graph, snap SnapResult) {
-	u := snap.NodeU
-	v := snap.NodeV
+	u, v := snap.NodeU, snap.NodeV
 	weight := g.Weight[snap.EdgeIdx]
+	pen := accessPenalty(g, snap)
 
-	dv := uint32(math.Round(float64(weight) * (1 - snap.Ratio)))
-	qs.touchFwd(v, dv)
-	qs.FwdPQ.Push(v, dv)
-
+	qs.seedFwdMin(v, uint32(math.Round(float64(weight)*(1-snap.Ratio)))+pen)
 	if findEdge(g.FirstOut, g.Head, v, u) != noNode {
-		du := uint32(math.Round(float64(weight) * snap.Ratio))
-		qs.touchFwd(u, du)
-		qs.FwdPQ.Push(u, du)
+		qs.seedFwdMin(u, uint32(math.Round(float64(weight)*snap.Ratio))+pen)
 	}
 }
 
@@ -236,18 +260,13 @@ func seedForward(qs *QueryState, g *graph.Graph, snap SnapResult) {
 // (travel u→v, stop at the point) is always legal; arriving from v requires the
 // reverse edge v→u to exist.
 func seedBackward(qs *QueryState, g *graph.Graph, snap SnapResult) {
-	u := snap.NodeU
-	v := snap.NodeV
+	u, v := snap.NodeU, snap.NodeV
 	weight := g.Weight[snap.EdgeIdx]
+	pen := accessPenalty(g, snap)
 
-	du := uint32(math.Round(float64(weight) * snap.Ratio))
-	qs.touchBwd(u, du)
-	qs.BwdPQ.Push(u, du)
-
+	qs.seedBwdMin(u, uint32(math.Round(float64(weight)*snap.Ratio))+pen)
 	if findEdge(g.FirstOut, g.Head, v, u) != noNode {
-		dv := uint32(math.Round(float64(weight) * (1 - snap.Ratio)))
-		qs.touchBwd(v, dv)
-		qs.BwdPQ.Push(v, dv)
+		qs.seedBwdMin(v, uint32(math.Round(float64(weight)*(1-snap.Ratio)))+pen)
 	}
 }
 

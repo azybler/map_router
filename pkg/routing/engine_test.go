@@ -6,6 +6,7 @@ import (
 
 	"github.com/paulmach/osm"
 
+	"github.com/azybler/map_router/pkg/ch"
 	"github.com/azybler/map_router/pkg/geo"
 	"github.com/azybler/map_router/pkg/graph"
 	osmparser "github.com/azybler/map_router/pkg/osm"
@@ -173,5 +174,52 @@ func assertDistanceEqualsPolyline(t *testing.T, res *RouteResult) {
 	}
 	if math.Abs(sum-res.TotalDistanceMeters) > 0.5 {
 		t.Errorf("distance %.2f != polyline length %.2f", res.TotalDistanceMeters, sum)
+	}
+}
+
+func chContract(t *testing.T, g *graph.Graph) *graph.CHGraph {
+	t.Helper()
+	return ch.Contract(g)
+}
+
+// stubParse: main road A-B-C-D (lon 103.800, ~100 m apart) plus a stub node S
+// that sits ~2 m from the query but connects to the network ONLY via a far node
+// F (~3.3 km east). Reaching the main road from S costs a ~6.8 km GEOMETRIC
+// detour, which the geometry-based distance (Task A2) can detect.
+func stubParse() *osmparser.ParseResult {
+	return &osmparser.ParseResult{
+		Edges: []osmparser.RawEdge{
+			{FromNodeID: 100, ToNodeID: 200, Weight: 100}, {FromNodeID: 200, ToNodeID: 100, Weight: 100},
+			{FromNodeID: 200, ToNodeID: 300, Weight: 100}, {FromNodeID: 300, ToNodeID: 200, Weight: 100},
+			{FromNodeID: 300, ToNodeID: 400, Weight: 100}, {FromNodeID: 400, ToNodeID: 300, Weight: 100},
+			{FromNodeID: 500, ToNodeID: 600, Weight: 3300}, {FromNodeID: 600, ToNodeID: 500, Weight: 3300},
+			{FromNodeID: 600, ToNodeID: 100, Weight: 3300}, {FromNodeID: 100, ToNodeID: 600, Weight: 3300},
+		},
+		NodeLat: map[osm.NodeID]float64{
+			100: 1.30000, 200: 1.30090, 300: 1.30180, 400: 1.30270,
+			500: 1.30093, 600: 1.30090,
+		},
+		NodeLon: map[osm.NodeID]float64{
+			100: 103.80000, 200: 103.80000, 300: 103.80000, 400: 103.80000,
+			500: 103.80050, 600: 103.83000,
+		},
+	}
+}
+
+func TestMultiCandidateAvoidsStub(t *testing.T) {
+	g := graph.Build(stubParse())
+	chg := chContract(t, g)
+	eng := NewEngine(chg, g)
+
+	// Query ~2 m from stub node S (single-nearest snaps to S-F); destination is
+	// node D on the main road. Via stub: S→F→A→B→C→D ≈ 6.8 km. Via main: ≈ 250 m.
+	res, err := eng.Route(t.Context(),
+		LatLng{Lat: 1.30093, Lng: 103.80048},
+		LatLng{Lat: 1.30270, Lng: 103.80000})
+	if err != nil {
+		t.Fatalf("Route: %v", err)
+	}
+	if res.TotalDistanceMeters > 2000 {
+		t.Errorf("expected main-road route (<2 km), got %.0f m (stub detour not avoided)", res.TotalDistanceMeters)
 	}
 }
