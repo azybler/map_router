@@ -1,6 +1,8 @@
 package osm
 
 import (
+	"encoding/json"
+	"os"
 	"strconv"
 	"strings"
 
@@ -31,6 +33,46 @@ func DefaultSpeedTable() SpeedTable {
 		LinkFactor: 0.7,
 		Fallback:   30,
 	}
+}
+
+// ParseSpeedTable parses a JSON speed table, overlaying it on DefaultSpeedTable.
+// Omitted top-level fields keep their defaults. NOTE: class_kmh and zone_kmh,
+// when present, REPLACE the entire default map (not a per-key merge) — so a
+// provided class_kmh must list every class you rely on. link_factor/fallback
+// override only when > 0.
+func ParseSpeedTable(data []byte) (SpeedTable, error) {
+	def := DefaultSpeedTable()
+	var raw struct {
+		ClassKmh   map[string]float64 `json:"class_kmh"`
+		ZoneKmh    map[string]float64 `json:"zone_kmh"`
+		LinkFactor float64            `json:"link_factor"`
+		Fallback   float64            `json:"fallback"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return SpeedTable{}, err
+	}
+	if raw.ClassKmh != nil {
+		def.ClassKmh = raw.ClassKmh
+	}
+	if raw.ZoneKmh != nil {
+		def.ZoneKmh = raw.ZoneKmh
+	}
+	if raw.LinkFactor > 0 {
+		def.LinkFactor = raw.LinkFactor
+	}
+	if raw.Fallback > 0 {
+		def.Fallback = raw.Fallback
+	}
+	return def, nil
+}
+
+// LoadSpeedTable reads a JSON speed table from path.
+func LoadSpeedTable(path string) (SpeedTable, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return SpeedTable{}, err
+	}
+	return ParseSpeedTable(data)
 }
 
 // classSpeed returns the base (non-link) speed for a highway class.

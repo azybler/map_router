@@ -2,6 +2,7 @@ package osm
 
 import (
 	"math"
+	"os"
 	"testing"
 
 	"github.com/paulmach/osm"
@@ -41,5 +42,33 @@ func TestSpeedKmh(t *testing.T) {
 		if math.Abs(got-c.want) > 0.01 {
 			t.Errorf("%s: SpeedKmh = %.3f, want %.3f", c.name, got, c.want)
 		}
+	}
+}
+
+func TestLoadSpeedTable(t *testing.T) {
+	jsonData := `{"class_kmh":{"motorway":100,"primary":50},"zone_kmh":{"MY:urban":60},"link_factor":0.6,"fallback":28}`
+	tbl, err := ParseSpeedTable([]byte(jsonData))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tbl.ClassKmh["motorway"] != 100 || tbl.LinkFactor != 0.6 || tbl.Fallback != 28 {
+		t.Errorf("parsed table wrong: %+v", tbl)
+	}
+
+	// Exercise the filesystem path too.
+	dir := t.TempDir()
+	path := dir + "/speeds.json"
+	if err := os.WriteFile(path, []byte(jsonData), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadSpeedTable(path)
+	if err != nil {
+		t.Fatalf("LoadSpeedTable: %v", err)
+	}
+	if loaded.ClassKmh["primary"] != 50 || loaded.Fallback != 28 {
+		t.Errorf("loaded table wrong: %+v", loaded)
+	}
+	if _, err := LoadSpeedTable(dir + "/missing.json"); err == nil {
+		t.Error("expected error for missing file")
 	}
 }

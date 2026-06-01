@@ -19,6 +19,7 @@ func main() {
 	bbox := flag.String("bbox", "", "Bounding box filter: minLat,minLng,maxLat,maxLng (e.g. 1.15,103.6,1.48,104.1)")
 	singapore := flag.Bool("singapore", false, "Shortcut for --bbox 1.15,103.6,1.48,104.1 (Singapore bounding box)")
 	kl := flag.Bool("kl", false, "Shortcut for --bbox 2.75,101.2,3.5,102.0 (Selangor + Kuala Lumpur bounding box)")
+	speeds := flag.String("speeds", "", "Path to a JSON speed table (default: built-in Malaysian priors)")
 	flag.Parse()
 
 	if *input == "" {
@@ -42,6 +43,18 @@ func main() {
 		}
 		opts.BBox = osmparser.BBox{MinLat: minLat, MaxLat: maxLat, MinLng: minLng, MaxLng: maxLng}
 		log.Printf("Using bounding box filter: lat [%.4f, %.4f], lng [%.4f, %.4f]", minLat, maxLat, minLng, maxLng)
+	}
+
+	if *speeds != "" {
+		tbl, err := osmparser.LoadSpeedTable(*speeds)
+		if err != nil {
+			log.Fatalf("Failed to load speed table: %v", err)
+		}
+		opts.Speeds = tbl
+		log.Printf("Using speed table from %s", *speeds)
+	} else {
+		opts.Speeds = osmparser.DefaultSpeedTable()
+		log.Println("Using built-in default speed table")
 	}
 
 	start := time.Now()
