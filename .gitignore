@@ -41,3 +41,9 @@ Thumbs.db
 graph.time.bin
 *.speeds.sha256
 /preprocess
+
+# Elevete route-cache dataset — sensitive customer endpoints, generated outputs
+# (CSVs, comparison results), Python bytecode, dated snapshots, and internal
+# prod-extraction docs. Kept entirely out of the repo; the benchmark methodology
+# is documented in docs/ and the harness lives locally.
+datasets/
