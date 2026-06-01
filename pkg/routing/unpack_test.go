@@ -29,8 +29,8 @@ func parallelShortcutParse() *osmparser.ParseResult {
 	return &osmparser.ParseResult{
 		Edges: []osmparser.RawEdge{
 			{FromNodeID: 1000, ToNodeID: 3000, Weight: 100}, {FromNodeID: 3000, ToNodeID: 1000, Weight: 100}, // A-B direct (expensive)
-			{FromNodeID: 1000, ToNodeID: 2000, Weight: 10},  {FromNodeID: 2000, ToNodeID: 1000, Weight: 10},  // A-X cheap
-			{FromNodeID: 2000, ToNodeID: 3000, Weight: 10},  {FromNodeID: 3000, ToNodeID: 2000, Weight: 10},  // X-B cheap
+			{FromNodeID: 1000, ToNodeID: 2000, Weight: 10}, {FromNodeID: 2000, ToNodeID: 1000, Weight: 10}, // A-X cheap
+			{FromNodeID: 2000, ToNodeID: 3000, Weight: 10}, {FromNodeID: 3000, ToNodeID: 2000, Weight: 10}, // X-B cheap
 			{FromNodeID: 1000, ToNodeID: 5000, Weight: 200}, {FromNodeID: 5000, ToNodeID: 1000, Weight: 200}, // A-C (raises A priority)
 			{FromNodeID: 1000, ToNodeID: 6000, Weight: 200}, {FromNodeID: 6000, ToNodeID: 1000, Weight: 200}, // A-D (raises A priority)
 			{FromNodeID: 3000, ToNodeID: 7000, Weight: 200}, {FromNodeID: 7000, ToNodeID: 3000, Weight: 200}, // B-E (raises B priority)
