@@ -47,6 +47,7 @@ type Segment struct {
 // RouteResult is the output of a route query.
 type RouteResult struct {
 	TotalDistanceMeters float64
+	DurationSeconds     float64 // internal: mu/1000; may include access-penalty time; NOT exposed via API in Phase 1
 	Segments            []Segment
 }
 
@@ -130,6 +131,7 @@ func (e *Engine) Route(ctx context.Context, start, end LatLng) (*RouteResult, er
 
 	return &RouteResult{
 		TotalDistanceMeters: totalDistMeters,
+		DurationSeconds:     float64(mu) / 1000.0,
 		Segments: []Segment{
 			{
 				DistanceMeters: totalDistMeters,

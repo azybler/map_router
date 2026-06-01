@@ -257,3 +257,16 @@ func TestMultiCandidateAvoidsStub(t *testing.T) {
 		t.Errorf("expected main-road route (<2 km), got %.0f m (stub detour not avoided)", res.TotalDistanceMeters)
 	}
 }
+
+func TestDurationSecondsPopulated(t *testing.T) {
+	g, chg := buildTestGraphAndCH(t)
+	eng := NewEngine(chg, g)
+	res, err := eng.Route(t.Context(),
+		LatLng{Lat: 1.300, Lng: 103.800}, LatLng{Lat: 1.301, Lng: 103.802})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.DurationSeconds <= 0 {
+		t.Errorf("DurationSeconds = %f, want > 0", res.DurationSeconds)
+	}
+}
