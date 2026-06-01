@@ -708,10 +708,14 @@ func (qs *QueryState) seedBwdMin(node, dist uint32) {
 In `pkg/routing/engine.go`, add a package-level config and an access-penalty helper:
 
 ```go
+// NOTE: snapK and accessPenaltyMult below are STARTING values. The Change-A
+// benchmark gate (A5) tuned them to snapK=8, accessPenaltyMult=4.0 — k=4 was too
+// small for dense disconnected pockets, and mult=1.0 let normal snaps drift to
+// farther roads. Use the tuned values.
 const (
-	snapK             = 4
+	snapK             = 8
 	snapRadiusMeters  = maxSnapDistMeters // 500 m: never reject what single-nearest accepted
-	accessPenaltyMult = 1.0               // off-road distance penalty multiplier
+	accessPenaltyMult = 4.0               // off-road distance penalty multiplier
 )
 
 // accessPenalty converts the off-road snap distance into the active metric's
