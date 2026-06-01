@@ -181,43 +181,39 @@ func (e *Engine) buildGeometry(nodes []uint32) []LatLng {
 	return geom
 }
 
-// seedForward seeds the forward PQ with the start snap point's reachable nodes.
+// seedForward seeds the forward PQ from the start snap point, respecting edge
+// direction: travel forward to v is always legal (edge u→v exists); travel
+// backward to u is legal only if the reverse edge v→u exists.
 func seedForward(qs *QueryState, g *graph.Graph, snap SnapResult) {
 	u := snap.NodeU
 	v := snap.NodeV
 	weight := g.Weight[snap.EdgeIdx]
 
-	// Distance from snap point to v (forward along edge u→v).
 	dv := uint32(math.Round(float64(weight) * (1 - snap.Ratio)))
-	if dv < math.MaxUint32 {
-		qs.touchFwd(v, dv)
-		qs.FwdPQ.Push(v, dv)
-	}
+	qs.touchFwd(v, dv)
+	qs.FwdPQ.Push(v, dv)
 
-	// Distance from snap point to u (backward along edge u→v).
-	du := uint32(math.Round(float64(weight) * snap.Ratio))
-	if du < math.MaxUint32 {
+	if findEdge(g.FirstOut, g.Head, v, u) != noNode {
+		du := uint32(math.Round(float64(weight) * snap.Ratio))
 		qs.touchFwd(u, du)
 		qs.FwdPQ.Push(u, du)
 	}
 }
 
-// seedBackward seeds the backward PQ with the end snap point's reachable nodes.
+// seedBackward seeds the backward PQ from the end snap point. Arriving from u
+// (travel u→v, stop at the point) is always legal; arriving from v requires the
+// reverse edge v→u to exist.
 func seedBackward(qs *QueryState, g *graph.Graph, snap SnapResult) {
 	u := snap.NodeU
 	v := snap.NodeV
 	weight := g.Weight[snap.EdgeIdx]
 
-	// Distance from u to snap point (forward direction).
 	du := uint32(math.Round(float64(weight) * snap.Ratio))
-	if du < math.MaxUint32 {
-		qs.touchBwd(u, du)
-		qs.BwdPQ.Push(u, du)
-	}
+	qs.touchBwd(u, du)
+	qs.BwdPQ.Push(u, du)
 
-	// Distance from v to snap point (backward direction).
-	dv := uint32(math.Round(float64(weight) * (1 - snap.Ratio)))
-	if dv < math.MaxUint32 {
+	if findEdge(g.FirstOut, g.Head, v, u) != noNode {
+		dv := uint32(math.Round(float64(weight) * (1 - snap.Ratio)))
 		qs.touchBwd(v, dv)
 		qs.BwdPQ.Push(v, dv)
 	}
