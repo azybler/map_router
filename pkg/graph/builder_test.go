@@ -97,6 +97,12 @@ func TestBuildBidirectionalEdges(t *testing.T) {
 	}
 }
 
+func TestBinaryVersionIs3(t *testing.T) {
+	if version != 3 {
+		t.Errorf("binary format version = %d, want 3 (time metric)", version)
+	}
+}
+
 func TestBuildCSRInvariants(t *testing.T) {
 	// Star graph: center -> A, center -> B, center -> C
 	result := &osmparser.ParseResult{
