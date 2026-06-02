@@ -22,6 +22,7 @@ OSM_URL="${OSM_URL:-https://download.geofabrik.de/asia/malaysia-singapore-brunei
 PBF="${PBF:-malaysia-singapore-brunei-latest.osm.pbf}"
 OUTPUT="${OUTPUT:-graph.bin}"
 FILTER="${FILTER:---kl}"   # Selangor/KL bbox. Alternatives: --singapore | --bbox minLat,minLng,maxLat,maxLng
+SPEEDS="${SPEEDS:-speeds.json}"   # tunable class speed table (see speeds.json)
 
 echo "==> Building preprocess binary"
 go build -o bin/map-router-preprocess ./cmd/preprocess
@@ -45,8 +46,15 @@ fi
 mv -f "$tmp_pbf" "$PBF"
 echo "    saved $PBF ($(du -h "$PBF" | cut -f1))"
 
-echo "==> Regenerating $OUTPUT (filter: $FILTER)"
-bin/map-router-preprocess --input "$PBF" --output "$OUTPUT" "$FILTER"
+echo "==> Regenerating $OUTPUT (filter: $FILTER, speeds: $SPEEDS)"
+bin/map-router-preprocess --input "$PBF" --output "$OUTPUT" "$FILTER" --speeds "$SPEEDS"
+# Record the speed-table hash. Prefer sha256sum (common on Linux/CI); fall back
+# to shasum -a 256 (macOS) for portability.
+if command -v sha256sum >/dev/null 2>&1; then
+	sha256sum "$SPEEDS" | tee "${OUTPUT}.speeds.sha256"
+else
+	shasum -a 256 "$SPEEDS" | tee "${OUTPUT}.speeds.sha256"
+fi
 
 echo "==> Done. $OUTPUT refreshed ($(du -h "$OUTPUT" | cut -f1))."
 echo "    Restart the server (./run_server.sh) to load the new graph."

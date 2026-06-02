@@ -13,7 +13,7 @@ import (
 
 const (
 	magicBytes = "MPROUTER"
-	version    = uint32(2) // v2: added original graph edges for snapping
+	version    = uint32(3) // v3: edge weights are travel time (ms), not distance (mm)
 	maxNodes   = 10_000_000
 	maxEdges   = 50_000_000
 )

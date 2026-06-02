@@ -141,3 +141,22 @@ func (qs *QueryState) touchBwd(node uint32, dist uint32) {
 	}
 	qs.DistBwd[node] = dist
 }
+
+// seedFwdMin seeds node in the forward search at dist, keeping the minimum if
+// the node was already seeded by another candidate. Safe to call repeatedly.
+func (qs *QueryState) seedFwdMin(node, dist uint32) {
+	if qs.DistFwd[node] != math.MaxUint32 && dist >= qs.DistFwd[node] {
+		return
+	}
+	qs.touchFwd(node, dist)
+	qs.FwdPQ.Push(node, dist)
+}
+
+// seedBwdMin seeds node in the backward search at dist, keeping the minimum.
+func (qs *QueryState) seedBwdMin(node, dist uint32) {
+	if qs.DistBwd[node] != math.MaxUint32 && dist >= qs.DistBwd[node] {
+		return
+	}
+	qs.touchBwd(node, dist)
+	qs.BwdPQ.Push(node, dist)
+}

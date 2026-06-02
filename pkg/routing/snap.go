@@ -117,6 +117,61 @@ func (s *Snapper) cellRange(key uint64) []cellEdge {
 	return s.edges[lo:hi]
 }
 
+// SnapCandidates returns up to k nearest DISTINCT road edges within radiusMeters
+// of the query point, sorted ascending by off-road distance. Distinct = unique
+// undirected node-pair, so the two directed halves of a two-way road and
+// duplicate geometry collapse to one candidate. Note that the 3×3 grid search
+// covers roughly ±1.1 km, so radiusMeters larger than ~1 km will silently miss
+// farther edges (current callers use ≤ maxSnapDistMeters = 500 m, which is safe).
+func (s *Snapper) SnapCandidates(lat, lng float64, k int, radiusMeters float64) []SnapResult {
+	if k <= 0 {
+		return nil
+	}
+	centerLat, centerLon := gridCell(lat, lng)
+
+	var all []SnapResult
+	for dLat := int32(-1); dLat <= 1; dLat++ {
+		for dLon := int32(-1); dLon <= 1; dLon++ {
+			key := cellKey(centerLat+dLat, centerLon+dLon)
+			for _, ce := range s.cellRange(key) {
+				u := ce.source
+				v := s.g.Head[ce.edgeIdx]
+				exactDist, ratio := geo.PointToSegmentDist(
+					lat, lng,
+					s.g.NodeLat[u], s.g.NodeLon[u],
+					s.g.NodeLat[v], s.g.NodeLon[v],
+				)
+				if exactDist <= radiusMeters {
+					all = append(all, SnapResult{
+						EdgeIdx: ce.edgeIdx, NodeU: u, NodeV: v, Ratio: ratio, Dist: exactDist,
+					})
+				}
+			}
+		}
+	}
+
+	sort.Slice(all, func(i, j int) bool { return all[i].Dist < all[j].Dist })
+
+	seen := make(map[uint64]struct{}, len(all))
+	out := make([]SnapResult, 0, k)
+	for _, r := range all {
+		a, b := r.NodeU, r.NodeV
+		if a > b {
+			a, b = b, a
+		}
+		pairKey := uint64(a)<<32 | uint64(b)
+		if _, dup := seen[pairKey]; dup {
+			continue
+		}
+		seen[pairKey] = struct{}{}
+		out = append(out, r)
+		if len(out) >= k {
+			break
+		}
+	}
+	return out
+}
+
 // Snap finds the nearest road segment to the given lat/lng.
 func (s *Snapper) Snap(lat, lng float64) (SnapResult, error) {
 	centerLat, centerLon := gridCell(lat, lng)

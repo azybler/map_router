@@ -1,0 +1,22 @@
+{
+  "class_kmh": {
+    "motorway": 100,
+    "trunk": 80,
+    "primary": 53,
+    "secondary": 37,
+    "tertiary": 27,
+    "unclassified": 23,
+    "residential": 15,
+    "living_street": 6,
+    "service": 7
+  },
+  "zone_kmh": {
+    "MY:urban": 60,
+    "MY:rural": 90,
+    "MY:expressway": 110,
+    "RM:urban": 60,
+    "RM:rural": 90
+  },
+  "link_factor": 0.7,
+  "fallback": 30
+}

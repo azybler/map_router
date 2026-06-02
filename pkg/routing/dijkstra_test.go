@@ -150,6 +150,78 @@ func TestMinHeap(t *testing.T) {
 	}
 }
 
+// plainDijkstraMulti runs multi-source Dijkstra from seed map src{node:dist}.
+func plainDijkstraMulti(g *graph.Graph, src map[uint32]uint32) []uint32 {
+	dist := make([]uint32, g.NumNodes)
+	for i := range dist {
+		dist[i] = math.MaxUint32
+	}
+	type item struct{ node, dist uint32 }
+	var pq []item
+	for n, d := range src {
+		dist[n] = d
+		pq = append(pq, item{n, d})
+	}
+	for len(pq) > 0 {
+		minIdx := 0
+		for i := 1; i < len(pq); i++ {
+			if pq[i].dist < pq[minIdx].dist {
+				minIdx = i
+			}
+		}
+		cur := pq[minIdx]
+		pq[minIdx] = pq[len(pq)-1]
+		pq = pq[:len(pq)-1]
+		if cur.dist > dist[cur.node] {
+			continue
+		}
+		s, e := g.EdgesFrom(cur.node)
+		for ei := s; ei < e; ei++ {
+			v := g.Head[ei]
+			nd := cur.dist + g.Weight[ei]
+			if nd < dist[v] {
+				dist[v] = nd
+				pq = append(pq, item{v, nd})
+			}
+		}
+	}
+	return dist
+}
+
+func TestCHMultiSeedExactness(t *testing.T) {
+	g, chg := buildTestGraphAndCH(t)
+	eng := &Engine{chg: chg}
+
+	fwdSeeds := map[uint32]uint32{0: 50, 3: 10}
+	bwdSeeds := map[uint32]uint32{5: 20, 2: 70}
+
+	qs := NewQueryState(chg.NumNodes)
+	for n, d := range fwdSeeds {
+		qs.touchFwd(n, d)
+		qs.FwdPQ.Push(n, d)
+	}
+	for n, d := range bwdSeeds {
+		qs.touchBwd(n, d)
+		qs.BwdPQ.Push(n, d)
+	}
+	mu, _ := eng.runCHDijkstra(context.Background(), qs)
+
+	fwd := plainDijkstraMulti(g, fwdSeeds)
+	bwd := plainDijkstraMulti(g, bwdSeeds)
+	best := uint32(math.MaxUint32)
+	for n := uint32(0); n < g.NumNodes; n++ {
+		if fwd[n] == math.MaxUint32 || bwd[n] == math.MaxUint32 {
+			continue
+		}
+		if s := fwd[n] + bwd[n]; s < best {
+			best = s
+		}
+	}
+	if mu != best {
+		t.Errorf("multi-seed CH mu=%d, brute force=%d", mu, best)
+	}
+}
+
 func BenchmarkCHDijkstra(b *testing.B) {
 	result := &osmparser.ParseResult{
 		Edges: []osmparser.RawEdge{

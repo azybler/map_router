@@ -97,6 +97,38 @@ func TestBuildBidirectionalEdges(t *testing.T) {
 	}
 }
 
+func TestBinaryVersionIs3(t *testing.T) {
+	if version != 3 {
+		t.Errorf("binary format version = %d, want 3 (time metric)", version)
+	}
+}
+
+func TestBuildCarriesRestrictedFlag(t *testing.T) {
+	pr := &osmparser.ParseResult{
+		Edges: []osmparser.RawEdge{
+			{FromNodeID: 1, ToNodeID: 2, Weight: 100, Restricted: false},
+			{FromNodeID: 2, ToNodeID: 3, Weight: 100, Restricted: true},
+		},
+		NodeLat: map[osm.NodeID]float64{1: 1.30, 2: 1.30, 3: 1.30},
+		NodeLon: map[osm.NodeID]float64{1: 103.80, 2: 103.81, 3: 103.82},
+	}
+	g := Build(pr)
+	if uint32(len(g.EdgeRestricted)) != g.NumEdges {
+		t.Fatalf("EdgeRestricted len %d != NumEdges %d", len(g.EdgeRestricted), g.NumEdges)
+	}
+	for u := uint32(0); u < g.NumNodes; u++ {
+		for e := g.FirstOut[u]; e < g.FirstOut[u+1]; e++ {
+			from, to := u, g.Head[e]
+			if g.NodeLon[from] == 103.81 && g.NodeLon[to] == 103.82 && !g.EdgeRestricted[e] {
+				t.Error("edge 2->3 should be restricted")
+			}
+			if g.NodeLon[from] == 103.80 && g.NodeLon[to] == 103.81 && g.EdgeRestricted[e] {
+				t.Error("edge 1->2 should not be restricted")
+			}
+		}
+	}
+}
+
 func TestBuildCSRInvariants(t *testing.T) {
 	// Star graph: center -> A, center -> B, center -> C
 	result := &osmparser.ParseResult{
