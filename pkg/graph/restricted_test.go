@@ -19,8 +19,8 @@ func hasEdgeByLon(g *Graph, fromLon, toLon float64) bool {
 	return false
 }
 
-// culDeSacParse: public chain A(.80)<->B(.81)<->C(.82) plus a restricted spur
-// B<->D(.815). D hangs off the public network only at B (1 public touch) => keep.
+// culDeSacParse: public chain A(.80)<->B(.81)<->C(.82) + restricted spur B<->D(.815).
+// D touches public at ≤1 node => always inlined.
 func culDeSacParse() *osmparser.ParseResult {
 	return &osmparser.ParseResult{
 		Edges: []osmparser.RawEdge{
@@ -33,9 +33,9 @@ func culDeSacParse() *osmparser.ParseResult {
 	}
 }
 
-// bridgeParse: public A(.80)<->B(.81)<->C(.82) PLUS a short restricted edge A<->C
-// directly. The restricted cluster touches public at TWO nodes (A and C) => drop.
-func bridgeParse() *osmparser.ParseResult {
+// fastBridgeParse: public A(.80)<->B(.81)<->C(.82) (A→C public = 200) + a FAST
+// restricted cut-through A<->C (weight 10). through(A,C)=10 < 200 => shortcut => DROP.
+func fastBridgeParse() *osmparser.ParseResult {
 	return &osmparser.ParseResult{
 		Edges: []osmparser.RawEdge{
 			{FromNodeID: 1, ToNodeID: 2, Weight: 100}, {FromNodeID: 2, ToNodeID: 1, Weight: 100},
@@ -47,35 +47,9 @@ func bridgeParse() *osmparser.ParseResult {
 	}
 }
 
-func TestFilterKeepsCulDeSac(t *testing.T) {
-	g := FilterBridgingRestricted(Build(culDeSacParse()))
-	if !hasEdgeByLon(g, 103.81, 103.815) || !hasEdgeByLon(g, 103.815, 103.81) {
-		t.Error("cul-de-sac spur B<->D should be inlined (kept)")
-	}
-	if g.EdgeRestricted != nil {
-		t.Error("output graph must not carry restricted flags")
-	}
-	// public edges intact
-	if !hasEdgeByLon(g, 103.80, 103.81) || !hasEdgeByLon(g, 103.81, 103.82) {
-		t.Error("public edges must be preserved")
-	}
-}
-
-func TestFilterDropsBridge(t *testing.T) {
-	g := FilterBridgingRestricted(Build(bridgeParse()))
-	if hasEdgeByLon(g, 103.80, 103.82) || hasEdgeByLon(g, 103.82, 103.80) {
-		t.Error("bridging restricted edge A<->C should be dropped")
-	}
-	if !hasEdgeByLon(g, 103.80, 103.81) || !hasEdgeByLon(g, 103.81, 103.82) {
-		t.Error("public edges must be preserved")
-	}
-}
-
-// interiorBridgeParse: public chain P0(.80)<->P1(.81)<->P2(.82), plus a restricted
-// path P0<->R<->P2 through an interior-only node R(.815). The restricted cluster
-// {P0,R,P2} touches the public network at TWO nodes (P0 and P2) => must be dropped,
-// even though R itself is private-only.
-func interiorBridgeParse() *osmparser.ParseResult {
+// interiorFastBridgeParse: public A(.80)<->B(.81)<->C(.82) + a fast restricted path
+// A<->R(.815)<->C through interior node R (5+5=10 < 200) => shortcut => DROP.
+func interiorFastBridgeParse() *osmparser.ParseResult {
 	return &osmparser.ParseResult{
 		Edges: []osmparser.RawEdge{
 			{FromNodeID: 1, ToNodeID: 2, Weight: 100}, {FromNodeID: 2, ToNodeID: 1, Weight: 100},
@@ -88,14 +62,57 @@ func interiorBridgeParse() *osmparser.ParseResult {
 	}
 }
 
-func TestFilterDropsInteriorBridge(t *testing.T) {
-	g := FilterBridgingRestricted(Build(interiorBridgeParse()))
-	// The restricted cut-through via interior node R must be gone entirely.
+// slowEstateParse: public A(.80)<->B(.81)<->C(.82) (A→C public = 200) + a SLOW
+// multi-gate estate A<->D(.815)<->C (5000+5000=10000 >> 200). through > public =>
+// NOT a shortcut => INLINE (D reachable via either gate). This is the key case the
+// cul-de-sac rule wrongly dropped.
+func slowEstateParse() *osmparser.ParseResult {
+	return &osmparser.ParseResult{
+		Edges: []osmparser.RawEdge{
+			{FromNodeID: 1, ToNodeID: 2, Weight: 100}, {FromNodeID: 2, ToNodeID: 1, Weight: 100},
+			{FromNodeID: 2, ToNodeID: 3, Weight: 100}, {FromNodeID: 3, ToNodeID: 2, Weight: 100},
+			{FromNodeID: 1, ToNodeID: 4, Weight: 5000, Restricted: true}, {FromNodeID: 4, ToNodeID: 1, Weight: 5000, Restricted: true},
+			{FromNodeID: 4, ToNodeID: 3, Weight: 5000, Restricted: true}, {FromNodeID: 3, ToNodeID: 4, Weight: 5000, Restricted: true},
+		},
+		NodeLat: map[osm.NodeID]float64{1: 1.300, 2: 1.300, 3: 1.300, 4: 1.301},
+		NodeLon: map[osm.NodeID]float64{1: 103.80, 2: 103.81, 3: 103.82, 4: 103.815},
+	}
+}
+
+func TestFilterKeepsCulDeSac(t *testing.T) {
+	g := FilterBridgingRestricted(Build(culDeSacParse()))
+	if !hasEdgeByLon(g, 103.81, 103.815) || !hasEdgeByLon(g, 103.815, 103.81) {
+		t.Error("cul-de-sac spur should be inlined")
+	}
+	if g.EdgeRestricted != nil {
+		t.Error("output must carry no restricted flags")
+	}
+}
+
+func TestFilterDropsFastBridge(t *testing.T) {
+	g := FilterBridgingRestricted(Build(fastBridgeParse()))
+	if hasEdgeByLon(g, 103.80, 103.82) || hasEdgeByLon(g, 103.82, 103.80) {
+		t.Error("fast restricted cut-through A<->C should be dropped")
+	}
+	if !hasEdgeByLon(g, 103.80, 103.81) || !hasEdgeByLon(g, 103.81, 103.82) {
+		t.Error("public chain must be preserved")
+	}
+}
+
+func TestFilterDropsInteriorFastBridge(t *testing.T) {
+	g := FilterBridgingRestricted(Build(interiorFastBridgeParse()))
 	if hasEdgeByLon(g, 103.80, 103.815) || hasEdgeByLon(g, 103.815, 103.82) ||
 		hasEdgeByLon(g, 103.815, 103.80) || hasEdgeByLon(g, 103.82, 103.815) {
-		t.Error("restricted interior-blob bridge P0<->R<->P2 should be dropped (2 public touches)")
+		t.Error("fast restricted interior cut-through should be dropped")
 	}
-	// Public chain intact.
+}
+
+func TestFilterKeepsSlowMultiGateEstate(t *testing.T) {
+	g := FilterBridgingRestricted(Build(slowEstateParse()))
+	// Slow multi-gate estate is NOT a shortcut => inlined (both spurs kept).
+	if !hasEdgeByLon(g, 103.80, 103.815) || !hasEdgeByLon(g, 103.815, 103.82) {
+		t.Error("slow multi-gate estate should be inlined (through-time > public-time)")
+	}
 	if !hasEdgeByLon(g, 103.80, 103.81) || !hasEdgeByLon(g, 103.81, 103.82) {
 		t.Error("public chain must be preserved")
 	}
