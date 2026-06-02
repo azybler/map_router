@@ -1,7 +1,7 @@
 # Last-Mile Private-Road Access (Phase 2a)
 
 **Date:** 2026-06-02
-**Status:** Design (approved for planning; revised to "A-prime" after 5-lens adversarial review)
+**Status:** Partially shipped — leak-aware inline filter merged; full connector deferred (see Outcome)
 **Builds on:** the time-metric + robust-snapping work (`feat/time-based-routing-metric`, binary v3)
 **Branch:** `feat/last-mile-private-access`
 
@@ -161,3 +161,29 @@ server (unchanged): snap (now finds estate roads) → CH search drives in via th
   introduced here; worth a separate fix.
 - **≥2-public-touch private cut-throughs:** left excluded (unreachable) in v1.
 - **Inferred traffic / congestion** and **turn/junction penalties** (other Phase 2 threads).
+
+## Outcome (2026-06-02) — supersedes the ≤1-touch rule described above
+
+The ≤1-touch cul-de-sac rule (above) was **superseded during implementation** by a
+**leak-aware filter**: a restricted cluster is inlined unless the path *through* it is
+faster than the public network between its gateways (a genuine time-shortcut), in which
+case it is excluded. This is leak-free (validated over ~700k fuzzed graphs) and is what
+shipped on this branch.
+
+**What we learned (and why Phase 2a stops here):**
+- The cul-de-sac (≤1-touch) rule fixed only **4 of 38** gated routes — real Malaysian
+  estates are **multi-gate**, so the rule excluded them.
+- The leak-aware rule fixed only **~2** — the target estates turn out to be genuine
+  **time-shortcuts** (cutting through is faster than the public detour), so the filter
+  correctly excludes them to avoid leakage.
+- **Inlining ALL** private roads fixes ~31 routes (overlap 0.67→0.75, error 5.8→3.8%,
+  anomaly gone) but **leaks** (~15–18 non-gated routes cut through private roads).
+- Conclusion: **inlining cannot distinguish "enter to deliver" from "cut through."**
+  Only the **connector (the original Approach A)** — restricted edges kept out of the
+  CH overlay and bridged in only at a snapped origin/destination — can reach these
+  estates with zero leakage. It is the documented next step if gated last-mile accuracy
+  becomes a priority; **deferred by decision** (the shipped leak-aware filter's small,
+  safe gain was judged sufficient for now).
+
+**Shipped:** parser access classification + `Graph.EdgeRestricted` + leak-aware
+`FilterBridgingRestricted` + preprocess wiring. **No** CH/routing/binary changes.

@@ -1,7 +1,7 @@
 ---
 title: "feat: last-mile private-road access (Phase 2a)"
 type: feat
-status: planned
+status: partial — leak-aware filter shipped (T1–T4); fixes ~2-4 gated routes; connector deferred (see design doc Outcome)
 date: 2026-06-02
 brainstorm: docs/brainstorms/2026-06-02-last-mile-private-access-design.md
 ---
