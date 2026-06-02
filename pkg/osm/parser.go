@@ -3,9 +3,9 @@ package osm
 import (
 	"context"
 	"fmt"
+	"github.com/azybler/map_router/pkg/geo"
 	"io"
 	"log"
-	"github.com/azybler/map_router/pkg/geo"
 	"math"
 
 	"github.com/paulmach/osm"
