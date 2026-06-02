@@ -19,6 +19,7 @@ type RawEdge struct {
 	Weight     uint32    // travel time in milliseconds
 	ShapeLats  []float64 // intermediate shape node latitudes (excluding from/to)
 	ShapeLons  []float64 // intermediate shape node longitudes (excluding from/to)
+	Restricted bool      // gated/private (access=private/permit/residents); last-mile only
 }
 
 // computeWeightMs converts a segment length (m) and speed (km/h) to travel time
@@ -60,28 +61,35 @@ var carHighways = map[string]bool{
 	"service":        true,
 }
 
-// isCarAccessible returns true if the way is drivable by car.
-func isCarAccessible(tags osm.Tags) bool {
+// classifyAccess decides whether a car-class way is kept, and if kept whether it
+// is "restricted" (gated/private — usable for last-mile access, inlined later only
+// if it forms a cul-de-sac). access governs over motor_vehicle. access=destination
+// and access=customers stay PUBLIC (they route normally today).
+func classifyAccess(tags osm.Tags) (keep, restricted bool) {
 	hw := tags.Find("highway")
-	if !carHighways[hw] {
-		return false
+	if !carHighways[hw] || tags.Find("area") == "yes" {
+		return false, false
 	}
+	switch tags.Find("access") {
+	case "no":
+		return false, false
+	case "private", "permit", "residents":
+		return true, true
+	}
+	switch tags.Find("motor_vehicle") {
+	case "no":
+		return false, false
+	case "private", "destination", "customers":
+		return true, true
+	}
+	return true, false
+}
 
-	// Skip area highways (pedestrian plazas).
-	if tags.Find("area") == "yes" {
-		return false
-	}
-
-	// Skip restricted access.
-	access := tags.Find("access")
-	if access == "no" || access == "private" {
-		return false
-	}
-	if tags.Find("motor_vehicle") == "no" {
-		return false
-	}
-
-	return true
+// isCarAccessible reports whether a way is kept for car routing (ignoring the
+// restricted distinction). Thin wrapper over classifyAccess.
+func isCarAccessible(tags osm.Tags) bool {
+	keep, _ := classifyAccess(tags)
+	return keep
 }
 
 // directionFlags returns (forward, backward) based on highway type and oneway tags.
@@ -120,10 +128,11 @@ func directionFlags(tags osm.Tags) (forward, backward bool) {
 
 // wayInfo holds parsed way data collected during Pass 1.
 type wayInfo struct {
-	NodeIDs  []osm.NodeID
-	Forward  bool
-	Backward bool
-	SpeedKmh float64
+	NodeIDs    []osm.NodeID
+	Forward    bool
+	Backward   bool
+	SpeedKmh   float64
+	Restricted bool
 }
 
 // BBox defines a geographic bounding box for filtering.
@@ -176,7 +185,8 @@ func Parse(ctx context.Context, rs io.ReadSeeker, opts ...ParseOptions) (*ParseR
 			continue
 		}
 
-		if !isCarAccessible(w.Tags) {
+		keep, restricted := classifyAccess(w.Tags)
+		if !keep {
 			continue
 		}
 
@@ -196,10 +206,11 @@ func Parse(ctx context.Context, rs io.ReadSeeker, opts ...ParseOptions) (*ParseR
 		}
 
 		ways = append(ways, wayInfo{
-			NodeIDs:  nodeIDs,
-			Forward:  fwd,
-			Backward: bwd,
-			SpeedKmh: opt.Speeds.SpeedKmh(w.Tags),
+			NodeIDs:    nodeIDs,
+			Forward:    fwd,
+			Backward:   bwd,
+			SpeedKmh:   opt.Speeds.SpeedKmh(w.Tags),
+			Restricted: restricted,
 		})
 	}
 	if err := scanner.Err(); err != nil {
@@ -278,6 +289,7 @@ func Parse(ctx context.Context, rs io.ReadSeeker, opts ...ParseOptions) (*ParseR
 					FromNodeID: fromID,
 					ToNodeID:   toID,
 					Weight:     weight,
+					Restricted: w.Restricted,
 				})
 			}
 			if w.Backward {
@@ -285,6 +297,7 @@ func Parse(ctx context.Context, rs io.ReadSeeker, opts ...ParseOptions) (*ParseR
 					FromNodeID: toID,
 					ToNodeID:   fromID,
 					Weight:     weight,
+					Restricted: w.Restricted,
 				})
 			}
 		}
