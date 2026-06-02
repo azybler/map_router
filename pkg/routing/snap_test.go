@@ -62,4 +62,8 @@ func TestSnapCandidatesRespectsK(t *testing.T) {
 	if len(cands) != 1 {
 		t.Errorf("expected exactly 1 candidate with k=1, got %d", len(cands))
 	}
+	// k <= 0 must not panic (negative make cap) and returns nothing.
+	if got := s.SnapCandidates(1.30005, 103.8005, 0, 500.0); len(got) != 0 {
+		t.Errorf("expected 0 candidates with k=0, got %d", len(got))
+	}
 }

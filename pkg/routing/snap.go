@@ -124,6 +124,9 @@ func (s *Snapper) cellRange(key uint64) []cellEdge {
 // covers roughly ±1.1 km, so radiusMeters larger than ~1 km will silently miss
 // farther edges (current callers use ≤ maxSnapDistMeters = 500 m, which is safe).
 func (s *Snapper) SnapCandidates(lat, lng float64, k int, radiusMeters float64) []SnapResult {
+	if k <= 0 {
+		return nil
+	}
 	centerLat, centerLon := gridCell(lat, lng)
 
 	var all []SnapResult

@@ -23,7 +23,7 @@ func main() {
 	flag.Parse()
 
 	if *input == "" {
-		fmt.Fprintln(os.Stderr, "Usage: preprocess --input <file.osm.pbf> [--output graph.bin] [--singapore | --kl | --bbox minLat,minLng,maxLat,maxLng]")
+		fmt.Fprintln(os.Stderr, "Usage: preprocess --input <file.osm.pbf> [--output graph.bin] [--singapore | --kl | --bbox minLat,minLng,maxLat,maxLng] [--speeds <table.json>]")
 		os.Exit(1)
 	}
 

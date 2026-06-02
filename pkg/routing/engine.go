@@ -217,6 +217,12 @@ func (e *Engine) buildGeometry(nodes []uint32) []LatLng {
 
 // snapPointForCandidates returns the snap point of the nearest candidate that
 // has `node` as an endpoint (i.e. the candidate that could have seeded it).
+//
+// When several candidates share `node`, we anchor to the one with the smallest
+// off-road distance — the closest road to the requested point, which is the
+// correct visual start. (Seed cost = partial-edge + access penalty, and the
+// penalty is proportional to off-road distance, so min-distance ≈ min-seed-cost;
+// any residual difference is bounded because all such candidates meet at `node`.)
 func snapPointForCandidates(g *graph.Graph, cands []SnapResult, node uint32) (lat, lng float64, ok bool) {
 	best := -1
 	for i := range cands {

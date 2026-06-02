@@ -13,7 +13,9 @@
   "zone_kmh": {
     "MY:urban": 60,
     "MY:rural": 90,
-    "MY:expressway": 110
+    "MY:expressway": 110,
+    "RM:urban": 60,
+    "RM:rural": 90
   },
   "link_factor": 0.7,
   "fallback": 30
