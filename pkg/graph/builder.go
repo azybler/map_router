@@ -39,21 +39,23 @@ func Build(result *osmparser.ParseResult) *Graph {
 
 	// Step 2: Build compact edge list with remapped indices.
 	type compactEdge struct {
-		from      uint32
-		to        uint32
-		weight    uint32
-		shapeLats []float64
-		shapeLons []float64
+		from       uint32
+		to         uint32
+		weight     uint32
+		restricted bool
+		shapeLats  []float64
+		shapeLons  []float64
 	}
 
 	compact := make([]compactEdge, len(edges))
 	for i, e := range edges {
 		compact[i] = compactEdge{
-			from:      nodeSet[e.FromNodeID],
-			to:        nodeSet[e.ToNodeID],
-			weight:    e.Weight,
-			shapeLats: e.ShapeLats,
-			shapeLons: e.ShapeLons,
+			from:       nodeSet[e.FromNodeID],
+			to:         nodeSet[e.ToNodeID],
+			weight:     e.Weight,
+			restricted: e.Restricted,
+			shapeLats:  e.ShapeLats,
+			shapeLons:  e.ShapeLons,
 		}
 	}
 
@@ -70,6 +72,7 @@ func Build(result *osmparser.ParseResult) *Graph {
 	firstOut := make([]uint32, numNodes+1)
 	head := make([]uint32, numEdges)
 	weight := make([]uint32, numEdges)
+	edgeRestricted := make([]bool, numEdges)
 
 	// Geometry arrays.
 	geoFirstOut := make([]uint32, numEdges+1)
@@ -78,6 +81,7 @@ func Build(result *osmparser.ParseResult) *Graph {
 	for i, e := range compact {
 		head[i] = e.to
 		weight[i] = e.weight
+		edgeRestricted[i] = e.restricted
 		geoFirstOut[i] = uint32(len(geoShapeLat))
 		geoShapeLat = append(geoShapeLat, e.shapeLats...)
 		geoShapeLon = append(geoShapeLon, e.shapeLons...)
@@ -102,15 +106,16 @@ func Build(result *osmparser.ParseResult) *Graph {
 	}
 
 	return &Graph{
-		NumNodes:    numNodes,
-		NumEdges:    numEdges,
-		FirstOut:    firstOut,
-		Head:        head,
-		Weight:      weight,
-		NodeLat:     nodeLat,
-		NodeLon:     nodeLon,
-		GeoFirstOut: geoFirstOut,
-		GeoShapeLat: geoShapeLat,
-		GeoShapeLon: geoShapeLon,
+		NumNodes:       numNodes,
+		NumEdges:       numEdges,
+		FirstOut:       firstOut,
+		Head:           head,
+		Weight:         weight,
+		EdgeRestricted: edgeRestricted,
+		NodeLat:        nodeLat,
+		NodeLon:        nodeLon,
+		GeoFirstOut:    geoFirstOut,
+		GeoShapeLat:    geoShapeLat,
+		GeoShapeLon:    geoShapeLon,
 	}
 }

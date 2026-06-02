@@ -79,6 +79,14 @@ func main() {
 	g := graph.Build(parseResult)
 	log.Printf("Graph: %d nodes, %d edges", g.NumNodes, g.NumEdges)
 
+	// Inline cul-de-sac private/gated roads (access=private/permit/residents) so
+	// gated delivery endpoints are reachable; drop restricted clusters that could
+	// be through-shortcuts. Must run before component extraction + contraction.
+	beforeEdges := g.NumEdges
+	g = graph.FilterBridgingRestricted(g)
+	log.Printf("Private-road filter: %d -> %d edges (dropped %d bridging-restricted)",
+		beforeEdges, g.NumEdges, beforeEdges-g.NumEdges)
+
 	// Step 3: Extract largest connected component.
 	log.Println("Extracting largest connected component...")
 	componentNodes := graph.LargestComponent(g)

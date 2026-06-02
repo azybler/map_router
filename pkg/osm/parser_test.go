@@ -34,12 +34,12 @@ func TestIsCarAccessible(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "private access",
+			name: "private access (now kept as restricted)",
 			tags: osm.Tags{
 				{Key: "highway", Value: "residential"},
 				{Key: "access", Value: "private"},
 			},
-			want: false,
+			want: true,
 		},
 		{
 			name: "no access",
@@ -212,5 +212,34 @@ func TestEdgeWeightIsTravelTime(t *testing.T) {
 	}
 	if got == 0 {
 		t.Error("weight must be >= 1")
+	}
+}
+
+func TestClassifyAccess(t *testing.T) {
+	cases := []struct {
+		name           string
+		tags           osm.Tags
+		wantKeep       bool
+		wantRestricted bool
+	}{
+		{"plain residential", osm.Tags{{Key: "highway", Value: "residential"}}, true, false},
+		{"access=private gated", osm.Tags{{Key: "highway", Value: "residential"}, {Key: "access", Value: "private"}}, true, true},
+		{"access=permit gated", osm.Tags{{Key: "highway", Value: "residential"}, {Key: "access", Value: "permit"}}, true, true},
+		{"access=residents gated", osm.Tags{{Key: "highway", Value: "service"}, {Key: "access", Value: "residents"}}, true, true},
+		{"access=private + motor_vehicle=no (access governs)", osm.Tags{{Key: "highway", Value: "residential"}, {Key: "access", Value: "private"}, {Key: "motor_vehicle", Value: "no"}}, true, true},
+		{"access=destination stays public", osm.Tags{{Key: "highway", Value: "tertiary"}, {Key: "access", Value: "destination"}}, true, false},
+		{"access=customers stays public", osm.Tags{{Key: "highway", Value: "service"}, {Key: "access", Value: "customers"}}, true, false},
+		{"access=no dropped", osm.Tags{{Key: "highway", Value: "residential"}, {Key: "access", Value: "no"}}, false, false},
+		{"plain motor_vehicle=no dropped", osm.Tags{{Key: "highway", Value: "residential"}, {Key: "motor_vehicle", Value: "no"}}, false, false},
+		{"motor_vehicle=private restricted", osm.Tags{{Key: "highway", Value: "service"}, {Key: "motor_vehicle", Value: "private"}}, true, true},
+		{"footway dropped", osm.Tags{{Key: "highway", Value: "footway"}}, false, false},
+		{"area=yes dropped", osm.Tags{{Key: "highway", Value: "service"}, {Key: "area", Value: "yes"}}, false, false},
+		{"no highway dropped", osm.Tags{{Key: "name", Value: "X"}}, false, false},
+	}
+	for _, c := range cases {
+		keep, restricted := classifyAccess(c.tags)
+		if keep != c.wantKeep || restricted != c.wantRestricted {
+			t.Errorf("%s: classifyAccess = (%v,%v), want (%v,%v)", c.name, keep, restricted, c.wantKeep, c.wantRestricted)
+		}
 	}
 }
