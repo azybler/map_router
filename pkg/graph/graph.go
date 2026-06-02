@@ -37,6 +37,12 @@ type Graph struct {
 	FirstOut []uint32  // len: NumNodes + 1; FirstOut[i]..FirstOut[i+1] are edges from node i
 	Head     []uint32  // len: NumEdges; target node for each edge
 	Weight   []uint32  // len: NumEdges; travel time in milliseconds (v3 metric)
+
+	// EdgeRestricted[i] flags edge i as gated/private. Populated by Build and
+	// consumed by FilterBridgingRestricted at preprocess time; NOT serialized
+	// (nil after a binary load — the server treats all edges as normal).
+	EdgeRestricted []bool // len: NumEdges (build-time only)
+
 	NodeLat  []float64 // len: NumNodes
 	NodeLon  []float64 // len: NumNodes
 
