@@ -50,3 +50,10 @@ datasets/
 
 # Experiment/reference side graphs
 graph.*.bin
+
+# Australia OSM extract (downloaded by refresh_graph_au.sh)
+australia-latest.osm.pbf
+
+# Transient build artifacts (interrupted download / preprocess temp files)
+*.osm.pbf.download
+*.bin.tmp

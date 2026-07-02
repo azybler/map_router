@@ -52,25 +52,22 @@ func (uf *UnionFind) Union(x, y uint32) bool {
 	return true
 }
 
-// LargestComponent returns the node indices belonging to the largest
-// strongly connected component (SCC) of the directed graph.
+// computeSCC labels every node with the id of its strongly connected component
+// (SCC) and returns the per-component node counts.
 //
-// Routing requires strong connectivity: every node in the returned set must be
-// able to reach every other node while respecting edge direction (one-way
-// streets). A weakly connected component (treating the graph as undirected)
-// would retain nodes reachable in only one direction — e.g. the dead-end of a
-// one-way street with no path back. When the snapper later snaps a query
-// endpoint onto such a node, routes to or from that point fail with
-// "no route found" even though the road is reachable in reality.
+// Routing requires strong connectivity: within an SCC every node can reach every
+// other node while respecting edge direction (one-way streets). A weakly
+// connected component (treating the graph as undirected) would retain nodes
+// reachable in only one direction — e.g. the dead-end of a one-way street with
+// no path back. When the snapper later snaps a query endpoint onto such a node,
+// routes to or from that point fail with "no route found" even though the road
+// is reachable in reality.
 //
 // Uses iterative Kosaraju's algorithm (two linear passes over the graph and its
 // transpose) for O(V+E) time without recursion, which would overflow the stack
 // on a million-node graph.
-func LargestComponent(g *Graph) []uint32 {
+func computeSCC(g *Graph) (comp []uint32, sizes []uint32) {
 	n := g.NumNodes
-	if n == 0 {
-		return nil
-	}
 
 	// Build the transpose (reverse) adjacency in CSR form.
 	revFirstOut := make([]uint32, n+1)
@@ -121,7 +118,7 @@ func LargestComponent(g *Graph) []uint32 {
 	// Pass 2: assign SCC ids on the transpose, processing nodes in reverse
 	// finish order.
 	const unassigned = ^uint32(0)
-	comp := make([]uint32, n)
+	comp = make([]uint32, n)
 	for i := range comp {
 		comp[i] = unassigned
 	}
@@ -148,13 +145,27 @@ func LargestComponent(g *Graph) []uint32 {
 		numComps++
 	}
 
-	// Find the largest SCC by node count.
-	sizes := make([]uint32, numComps)
+	sizes = make([]uint32, numComps)
 	for _, c := range comp {
 		sizes[c]++
 	}
+	return comp, sizes
+}
+
+// LargestComponent returns the node indices belonging to the largest strongly
+// connected component of the directed graph, in ascending index order. This is
+// the right choice for a single contiguous road network (one landmass).
+func LargestComponent(g *Graph) []uint32 {
+	n := g.NumNodes
+	if n == 0 {
+		return nil
+	}
+
+	comp, sizes := computeSCC(g)
+
+	// Find the largest SCC by node count.
 	best := uint32(0)
-	for c := uint32(1); c < numComps; c++ {
+	for c := uint32(1); c < uint32(len(sizes)); c++ {
 		if sizes[c] > sizes[best] {
 			best = c
 		}
@@ -164,6 +175,44 @@ func LargestComponent(g *Graph) []uint32 {
 	nodes := make([]uint32, 0, sizes[best])
 	for i := uint32(0); i < n; i++ {
 		if comp[i] == best {
+			nodes = append(nodes, i)
+		}
+	}
+	return nodes
+}
+
+// LargeComponents returns the node indices of every strongly connected component
+// with at least minNodes nodes, in ascending index order. Unlike
+// LargestComponent it keeps multiple disconnected road networks, which is what a
+// region spanning several landmasses needs — e.g. all of Australia, where
+// Tasmania and other islands form their own components that are unreachable by
+// road from the mainland. minNodes drops trivial fragments (one-way stubs,
+// parsing artifacts); minNodes <= 1 keeps everything.
+//
+// The result is not globally strongly connected, but each retained component is,
+// so within-component routing always succeeds and a query that snaps its two
+// endpoints to different components correctly yields "no route found" (you can't
+// drive between disconnected road networks).
+func LargeComponents(g *Graph, minNodes uint32) []uint32 {
+	n := g.NumNodes
+	if n == 0 {
+		return nil
+	}
+
+	comp, sizes := computeSCC(g)
+
+	keep := make([]bool, len(sizes))
+	var keptNodes int
+	for c, sz := range sizes {
+		if sz >= minNodes {
+			keep[c] = true
+			keptNodes += int(sz)
+		}
+	}
+
+	nodes := make([]uint32, 0, keptNodes)
+	for i := uint32(0); i < n; i++ {
+		if keep[comp[i]] {
 			nodes = append(nodes, i)
 		}
 	}

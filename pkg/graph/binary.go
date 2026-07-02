@@ -13,9 +13,13 @@ import (
 
 const (
 	magicBytes = "MPROUTER"
-	version    = uint32(3) // v3: edge weights are travel time (ms), not distance (mm)
-	maxNodes   = 10_000_000
-	maxEdges   = 50_000_000
+	version    = uint32(3) // v3 format: edge weights are travel time (ms), or distance (cm) for shortest-distance graphs
+	// Load-time sanity bounds on header counts (guard against corrupt/oversized
+	// files). Sized for continent-scale graphs: all-of-Australia at full
+	// shape-node resolution is well within these. uint32 indices structurally
+	// support up to ~4.29e9, so these remain conservative.
+	maxNodes = 64_000_000
+	maxEdges = 256_000_000
 )
 
 func init() {

@@ -16,7 +16,7 @@ import (
 type RawEdge struct {
 	FromNodeID osm.NodeID
 	ToNodeID   osm.NodeID
-	Weight     uint32    // travel time in milliseconds
+	Weight     uint32    // travel time in ms, or physical distance in cm when ParseOptions.Distance is set
 	ShapeLats  []float64 // intermediate shape node latitudes (excluding from/to)
 	ShapeLons  []float64 // intermediate shape node longitudes (excluding from/to)
 	Restricted bool      // gated/private (access=private/permit/residents); last-mile only
@@ -30,6 +30,20 @@ func computeWeightMs(lengthMeters, speedKmh float64) uint32 {
 	}
 	ms := lengthMeters / (speedKmh / 3.6) * 1000
 	w := uint32(math.Round(ms))
+	if w == 0 {
+		w = 1
+	}
+	return w
+}
+
+// computeWeightDistanceCm converts a segment length (m) to a speed-independent
+// distance weight in centimeters, clamped to >= 1. Used for shortest-distance
+// routing (ParseOptions.Distance): the edge weight IS the physical road length,
+// so the router minimizes total distance instead of travel time. Centimeters
+// keep continent-scale path sums comfortably inside uint32 (max ~4.29e9 cm ≈
+// 42,900 km — far above any real-world route) while preserving sub-meter detail.
+func computeWeightDistanceCm(lengthMeters float64) uint32 {
+	w := uint32(math.Round(lengthMeters * 100))
 	if w == 0 {
 		w = 1
 	}
@@ -154,8 +168,10 @@ func (b BBox) Contains(lat, lng float64) bool {
 
 // ParseOptions configures the OSM parser.
 type ParseOptions struct {
-	BBox   BBox       // if non-zero, filter edges to this bounding box
-	Speeds SpeedTable // free-flow speed model; zero value → DefaultSpeedTable()
+	BBox     BBox       // if non-zero, filter edges to this bounding box
+	Speeds   SpeedTable // free-flow speed model; zero value → DefaultSpeedTable()
+	Distance bool       // if true, weight edges by physical road length (cm) for
+	// shortest-distance routing; Speeds is ignored.
 }
 
 // Parse reads an OSM PBF file and returns directed edges for car routing.
@@ -282,7 +298,12 @@ func Parse(ctx context.Context, rs io.ReadSeeker, opts ...ParseOptions) (*ParseR
 			}
 
 			dist := geo.Haversine(fromLat, fromLon, toLat, toLon)
-			weight := computeWeightMs(dist, w.SpeedKmh)
+			var weight uint32
+			if opt.Distance {
+				weight = computeWeightDistanceCm(dist)
+			} else {
+				weight = computeWeightMs(dist, w.SpeedKmh)
+			}
 
 			if w.Forward {
 				edges = append(edges, RawEdge{

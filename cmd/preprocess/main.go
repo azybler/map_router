@@ -20,10 +20,12 @@ func main() {
 	singapore := flag.Bool("singapore", false, "Shortcut for --bbox 1.15,103.6,1.48,104.1 (Singapore bounding box)")
 	kl := flag.Bool("kl", false, "Shortcut for --bbox 2.75,101.2,3.5,102.0 (Selangor + Kuala Lumpur bounding box)")
 	speeds := flag.String("speeds", "", "Path to a JSON speed table (default: built-in Malaysian priors)")
+	distance := flag.Bool("distance", false, "Weight edges by physical road length (shortest-distance routing) instead of travel time; ignores --speeds")
+	minComponent := flag.Int("min-component", 0, "Keep every strongly-connected road network with >= N nodes (0: keep only the largest, default). Use a small value like 2 to retain disconnected networks such as islands, e.g. Tasmania for all-of-Australia coverage")
 	flag.Parse()
 
 	if *input == "" {
-		fmt.Fprintln(os.Stderr, "Usage: preprocess --input <file.osm.pbf> [--output graph.bin] [--singapore | --kl | --bbox minLat,minLng,maxLat,maxLng] [--speeds <table.json>]")
+		fmt.Fprintln(os.Stderr, "Usage: preprocess --input <file.osm.pbf> [--output graph.bin] [--singapore | --kl | --bbox minLat,minLng,maxLat,maxLng] [--speeds <table.json> | --distance]")
 		os.Exit(1)
 	}
 
@@ -45,7 +47,10 @@ func main() {
 		log.Printf("Using bounding box filter: lat [%.4f, %.4f], lng [%.4f, %.4f]", minLat, maxLat, minLng, maxLng)
 	}
 
-	if *speeds != "" {
+	if *distance {
+		opts.Distance = true
+		log.Println("Distance metric: weighting edges by physical road length (cm); --speeds ignored")
+	} else if *speeds != "" {
 		tbl, err := osmparser.LoadSpeedTable(*speeds)
 		if err != nil {
 			log.Fatalf("Failed to load speed table: %v", err)
@@ -87,10 +92,19 @@ func main() {
 	log.Printf("Private-road filter: %d -> %d edges (dropped %d bridging-restricted)",
 		beforeEdges, g.NumEdges, beforeEdges-g.NumEdges)
 
-	// Step 3: Extract largest connected component.
-	log.Println("Extracting largest connected component...")
-	componentNodes := graph.LargestComponent(g)
-	log.Printf("Largest component: %d nodes (%.1f%%)", len(componentNodes), float64(len(componentNodes))/float64(g.NumNodes)*100)
+	// Step 3: Extract connected road network(s).
+	beforeComponent := g.NumNodes
+	var componentNodes []uint32
+	if *minComponent > 0 {
+		log.Printf("Extracting all strongly-connected components with >= %d nodes...", *minComponent)
+		componentNodes = graph.LargeComponents(g, uint32(*minComponent))
+	} else {
+		log.Println("Extracting largest connected component...")
+		componentNodes = graph.LargestComponent(g)
+	}
+	log.Printf("Kept %d nodes (%.1f%%); dropped %d disconnected/fragment nodes",
+		len(componentNodes), float64(len(componentNodes))/float64(beforeComponent)*100,
+		int(beforeComponent)-len(componentNodes))
 	g = graph.FilterToComponent(g, componentNodes)
 	log.Printf("Filtered graph: %d nodes, %d edges", g.NumNodes, g.NumEdges)
 
