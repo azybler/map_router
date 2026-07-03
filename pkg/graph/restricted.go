@@ -12,15 +12,29 @@ func addSat(a, b uint32) uint32 {
 	return s
 }
 
+// maxRestrictedPenaltyFactor caps the weight multiplier applied to shortcut
+// clusters. 50× makes any cut-through unattractive (even skipping a long
+// public detour through a short gated segment) while keeping the roads
+// reachable for genuine last-mile access (e.g. deliveries into gated estates);
+// forced last-mile paths are unaffected by the factor's size.
+const maxRestrictedPenaltyFactor = 50.0
+
 // FilterBridgingRestricted returns a copy of g in which restricted (gated/private)
-// edges are kept ONLY where inlining them cannot create a faster public→public
-// path. Restricted edges form clusters (connected components over restricted
-// edges); a cluster's "gateways" are its nodes that also touch a public edge. A
-// cluster is INLINED unless, for some ordered gateway pair (gi,gj), the shortest
+// edges are kept at normal weight where inlining them cannot create a faster
+// public→public path, and kept at a PENALIZED weight otherwise. Restricted edges
+// form clusters (connected components over restricted edges); a cluster's
+// "gateways" are its nodes that also touch a public edge. A cluster is inlined
+// at normal weight unless, for some ordered gateway pair (gi,gj), the shortest
 // path THROUGH the cluster (over restricted edges only) is strictly faster than
 // the shortest PUBLIC path gi→gj — i.e. it is a genuine through-shortcut, which
-// would leak. Clusters with ≤1 gateway are always inlined (no pair to shortcut).
-// Public edges are always kept. The returned graph carries no restricted flags.
+// would leak. Such clusters get their edge weights multiplied by the smallest
+// factor that neutralizes every through-advantage (capped at
+// maxRestrictedPenaltyFactor), so gated estates stay reachable for last-mile
+// destinations — matching Google's behavior — without becoming cut-throughs.
+// Clusters with ≤1 gateway are always inlined at normal weight (no pair to
+// shortcut). Public edges are always kept. The returned graph carries no
+// restricted flags. Note the reported route distance is measured from geometry,
+// not weight, so penalties never distort distances.
 //
 // If g.EdgeRestricted is nil, g is returned unchanged.
 func FilterBridgingRestricted(g *Graph) *Graph {
@@ -52,49 +66,48 @@ func FilterBridgingRestricted(g *Graph) *Graph {
 		}
 	}
 
-	keepCluster := make(map[uint32]bool, len(gateways))
-	var nMulti, nInlined, nDropped, nCapDropped int
+	// factor 1.0 = inline at normal weight; >1.0 = penalized shortcut cluster.
+	clusterFactor := make(map[uint32]float64, len(gateways))
+	var nMulti, nInlined, nPenalized, nCapPenalized int
 	for r, gw := range gateways {
 		if len(gw) <= 1 {
-			keepCluster[r] = true
+			clusterFactor[r] = 1.0
 		} else {
-			sc, byCap := clusterIsShortcut(g, gw)
-			keepCluster[r] = !sc
+			f, byCap := clusterPenaltyFactor(g, gw)
+			clusterFactor[r] = f
 			nMulti++
-			if !sc {
+			switch {
+			case f <= 1.0:
 				nInlined++
-			} else if byCap {
-				nCapDropped++
-			} else {
-				nDropped++
+			case byCap:
+				nCapPenalized++
+			default:
+				nPenalized++
 			}
 		}
 	}
-	log.Printf("restricted clusters: %d multi-gateway (%d inlined, %d dropped as shortcuts, %d dropped at settle-cap); %d cul-de-sac inlined",
-		nMulti, nInlined, nDropped, nCapDropped, len(gateways)-nMulti)
+	log.Printf("restricted clusters: %d multi-gateway (%d inlined, %d penalized as shortcuts, %d penalized at settle-cap); %d cul-de-sac inlined",
+		nMulti, nInlined, nPenalized, nCapPenalized, len(gateways)-nMulti)
 
-	// Rebuild CSR: keep every public edge, plus restricted edges of kept clusters.
-	survive := make([]bool, g.NumEdges)
-	firstOut := make([]uint32, n+1)
-	for u := uint32(0); u < n; u++ {
-		for e := g.FirstOut[u]; e < g.FirstOut[u+1]; e++ {
-			if !g.EdgeRestricted[e] || keepCluster[uf.Find(u)] {
-				survive[e] = true
-				firstOut[u+1]++
-			}
-		}
-	}
-	for i := uint32(1); i <= n; i++ {
-		firstOut[i] += firstOut[i-1]
-	}
-
+	// Rebuild CSR: every edge survives; restricted edges of shortcut clusters
+	// carry their cluster's penalty factor.
 	hasGeo := g.GeoFirstOut != nil
+	firstOut := make([]uint32, n+1)
 	var head, weight, geoFirstOut []uint32
 	var geoLat, geoLon []float64
 	for u := uint32(0); u < n; u++ {
+		firstOut[u] = uint32(len(head))
 		for e := g.FirstOut[u]; e < g.FirstOut[u+1]; e++ {
-			if !survive[e] {
-				continue
+			w := g.Weight[e]
+			if g.EdgeRestricted[e] {
+				if f := clusterFactor[uf.Find(u)]; f > 1.0 {
+					scaled := float64(w) * f
+					if scaled >= float64(^uint32(0)) {
+						w = ^uint32(0)
+					} else {
+						w = uint32(scaled)
+					}
+				}
 			}
 			if hasGeo {
 				geoFirstOut = append(geoFirstOut, uint32(len(geoLat)))
@@ -103,9 +116,10 @@ func FilterBridgingRestricted(g *Graph) *Graph {
 				geoLon = append(geoLon, g.GeoShapeLon[gs:ge]...)
 			}
 			head = append(head, g.Head[e])
-			weight = append(weight, g.Weight[e])
+			weight = append(weight, w)
 		}
 	}
+	firstOut[n] = uint32(len(head))
 	if hasGeo {
 		geoFirstOut = append(geoFirstOut, uint32(len(geoLat)))
 	}
@@ -125,26 +139,29 @@ func FilterBridgingRestricted(g *Graph) *Graph {
 	}
 }
 
-// clusterIsShortcut reports whether the restricted cluster with the given gateway
-// nodes offers a strictly-faster public→public path through it than the public
-// network does, for any ordered gateway pair.
-func clusterIsShortcut(g *Graph, gw []uint32) (shortcut bool, byCap bool) {
-	const maxPublicSettle = 200000 // safety cap: if exceeded, treat as a shortcut (exclude)
+// clusterPenaltyFactor returns the smallest weight multiplier that makes every
+// through-cluster path at least as slow as its public alternative (1.0 when the
+// cluster is not a shortcut at all), capped at maxRestrictedPenaltyFactor.
+// byCap is true when the public-side search hit its settle cap or a public
+// alternative was unreachable, in which case the cap factor is returned.
+func clusterPenaltyFactor(g *Graph, gw []uint32) (factor float64, byCap bool) {
+	const maxPublicSettle = 200000 // safety cap: if exceeded, apply the max penalty
 	targets := make(map[uint32]bool, len(gw))
 	for _, x := range gw {
 		targets[x] = true
 	}
+	factor = 1.0
 	for _, gi := range gw {
 		through := restrictedDijkstra(g, gi)
-		var cap uint32
+		var maxT uint32
 		any := false
 		// Reverse ordering (gj as source) is covered when gj's own iteration runs.
 		for _, gj := range gw {
 			if gj != gi {
 				if t, ok := through[gj]; ok {
 					any = true
-					if t > cap {
-						cap = t
+					if t > maxT {
+						maxT = t
 					}
 				}
 			}
@@ -152,24 +169,45 @@ func clusterIsShortcut(g *Graph, gw []uint32) (shortcut bool, byCap bool) {
 		if !any {
 			continue
 		}
-		pub, capped := publicDijkstra(g, gi, cap, maxPublicSettle, targets)
+		// Search the public side far enough to measure how much slower public
+		// is, not just whether it is slower (bounded by the penalty cap).
+		capCost := addSat(maxT, 0)
+		if scaled := float64(maxT) * maxRestrictedPenaltyFactor; scaled < float64(^uint32(0)) {
+			capCost = uint32(scaled)
+		} else {
+			capCost = ^uint32(0)
+		}
+		pub, capped := publicDijkstra(g, gi, capCost, maxPublicSettle, targets)
 		if capped {
-			return true, true
+			return maxRestrictedPenaltyFactor, true
 		}
 		for _, gj := range gw {
 			if gj == gi {
 				continue
 			}
 			t, ok := through[gj]
-			if !ok {
+			if !ok || t == 0 {
 				continue
 			}
-			if p, pok := pub[gj]; !pok || p > t {
-				return true, false // public can't match the through-time ⇒ genuine shortcut
+			p, pok := pub[gj]
+			if !pok {
+				// No public alternative within cap: penalize at max (the
+				// cluster may be the only access; it stays reachable).
+				return maxRestrictedPenaltyFactor, true
+			}
+			if p > t {
+				// Genuine shortcut: need factor ≥ p/t (5% margin) to neutralize.
+				need := float64(p) / float64(t) * 1.05
+				if need > factor {
+					factor = need
+				}
 			}
 		}
 	}
-	return false, false
+	if factor > maxRestrictedPenaltyFactor {
+		factor = maxRestrictedPenaltyFactor
+	}
+	return factor, false
 }
 
 // rdNode is a (node, dist) entry for the local Dijkstra heaps below.

@@ -2,8 +2,8 @@
   "class_kmh": {
     "motorway": 100,
     "trunk": 80,
-    "primary": 53,
-    "secondary": 37,
+    "primary": 48,
+    "secondary": 33,
     "tertiary": 27,
     "unclassified": 23,
     "residential": 15,
@@ -16,6 +16,9 @@
     "MY:expressway": 110,
     "RM:urban": 60,
     "RM:rural": 90
+  },
+  "floor_class_kmh": {
+    "motorway": 80
   },
   "link_factor": 0.7,
   "fallback": 30

@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 #
-# Refresh graph.bin in place: download the latest OSM extract and re-run
-# preprocessing, filtered to the Selangor/KL bounding box (--kl).
+# Refresh graph.time.bin in place: download the latest OSM extract and re-run
+# preprocessing, filtered to the Selangor/KL bounding box (--kl) — current
+# usage is KL/Selangor only. Speeds are Google-calibrated on 1,430 routes
+# (see datasets/elevete_route_cache/README.md); for full-peninsula coverage
+# use FILTER='--bbox 1.2,99.6,6.8,104.5' (~722 MB graph).
 #
 # Safe-by-default:
 #   - The PBF is downloaded to a temp file and only moved into place once it
@@ -20,8 +23,9 @@ cd "$(dirname "$0")"
 
 OSM_URL="${OSM_URL:-https://download.geofabrik.de/asia/malaysia-singapore-brunei-latest.osm.pbf}"
 PBF="${PBF:-malaysia-singapore-brunei-latest.osm.pbf}"
-OUTPUT="${OUTPUT:-graph.bin}"
-FILTER="${FILTER:---kl}"   # Selangor/KL bbox. Alternatives: --singapore | --bbox minLat,minLng,maxLat,maxLng
+OUTPUT="${OUTPUT:-graph.time.bin}"
+# Selangor/KL bbox. Alternatives: --singapore | --bbox minLat,minLng,maxLat,maxLng
+FILTER="${FILTER:---kl}"
 SPEEDS="${SPEEDS:-speeds.json}"   # tunable class speed table (see speeds.json)
 
 echo "==> Building preprocess binary"

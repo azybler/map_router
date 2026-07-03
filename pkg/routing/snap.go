@@ -120,18 +120,22 @@ func (s *Snapper) cellRange(key uint64) []cellEdge {
 // SnapCandidates returns up to k nearest DISTINCT road edges within radiusMeters
 // of the query point, sorted ascending by off-road distance. Distinct = unique
 // undirected node-pair, so the two directed halves of a two-way road and
-// duplicate geometry collapse to one candidate. Note that the 3×3 grid search
-// covers roughly ±1.1 km, so radiusMeters larger than ~1 km will silently miss
-// farther edges (current callers use ≤ maxSnapDistMeters = 500 m, which is safe).
+// duplicate geometry collapse to one candidate. The grid ring span is derived
+// from radiusMeters, so radii beyond the historical ~1.1 km 3×3 window are
+// searched correctly (used by the escalating-radius fallback in Route).
 func (s *Snapper) SnapCandidates(lat, lng float64, k int, radiusMeters float64) []SnapResult {
 	if k <= 0 {
 		return nil
 	}
 	centerLat, centerLon := gridCell(lat, lng)
 
+	// Ring span: each cell is ~1.1 km of latitude; cover radiusMeters fully
+	// (min 1 ring keeps the historical 3×3 behavior for radii ≤ 500 m).
+	span := int32(radiusMeters/(gridCellSize*111000)) + 1
+
 	var all []SnapResult
-	for dLat := int32(-1); dLat <= 1; dLat++ {
-		for dLon := int32(-1); dLon <= 1; dLon++ {
+	for dLat := -span; dLat <= span; dLat++ {
+		for dLon := -span; dLon <= span; dLon++ {
 			key := cellKey(centerLat+dLat, centerLon+dLon)
 			for _, ce := range s.cellRange(key) {
 				u := ce.source

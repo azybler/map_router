@@ -19,6 +19,23 @@ const (
 	accessPenaltyMult = 4.0               // off-road distance penalty multiplier
 )
 
+// snapRadiiMeters is the escalating snap search schedule: the standard 500 m
+// first (identical behavior for normal queries), then progressively wider so
+// endpoints inside dropped private/gated estates or other road-sparse spots
+// still produce a route instead of ErrPointTooFar.
+var snapRadiiMeters = []float64{snapRadiusMeters, 1500, 5000}
+
+// snapWithFallback returns snap candidates at the smallest radius in the
+// schedule that yields any.
+func (e *Engine) snapWithFallback(lat, lng float64) []SnapResult {
+	for _, r := range snapRadiiMeters {
+		if cands := e.snapper.SnapCandidates(lat, lng, snapK, r); len(cands) > 0 {
+			return cands
+		}
+	}
+	return nil
+}
+
 // accessPenalty converts the off-road snap distance into the active metric's
 // units using the candidate edge's own weight/length ratio, so it auto-scales
 // whether the metric is distance (mm) or time (ms).
@@ -79,12 +96,13 @@ func NewEngine(chg *graph.CHGraph, origGraph *graph.Graph) *Engine {
 
 // Route computes the shortest path between two points.
 func (e *Engine) Route(ctx context.Context, start, end LatLng) (*RouteResult, error) {
-	// Step 1: Snap points to nearest road segments (multi-candidate).
-	startCands := e.snapper.SnapCandidates(start.Lat, start.Lng, snapK, snapRadiusMeters)
+	// Step 1: Snap points to nearest road segments (multi-candidate, with an
+	// escalating radius fallback so road-sparse endpoints still route).
+	startCands := e.snapWithFallback(start.Lat, start.Lng)
 	if len(startCands) == 0 {
 		return nil, ErrPointTooFar
 	}
-	endCands := e.snapper.SnapCandidates(end.Lat, end.Lng, snapK, snapRadiusMeters)
+	endCands := e.snapWithFallback(end.Lat, end.Lng)
 	if len(endCands) == 0 {
 		return nil, ErrPointTooFar
 	}

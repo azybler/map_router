@@ -9,14 +9,19 @@ import (
 )
 
 func hasEdgeByLon(g *Graph, fromLon, toLon float64) bool {
+	return edgeWeightByLon(g, fromLon, toLon) != 0
+}
+
+// edgeWeightByLon returns the weight of the first edge fromLon→toLon, or 0 if absent.
+func edgeWeightByLon(g *Graph, fromLon, toLon float64) uint32 {
 	for u := uint32(0); u < g.NumNodes; u++ {
 		for e := g.FirstOut[u]; e < g.FirstOut[u+1]; e++ {
 			if g.NodeLon[u] == fromLon && g.NodeLon[g.Head[e]] == toLon {
-				return true
+				return g.Weight[e]
 			}
 		}
 	}
-	return false
+	return 0
 }
 
 // culDeSacParse: public chain A(.80)<->B(.81)<->C(.82) + restricted spur B<->D(.815).
@@ -34,7 +39,8 @@ func culDeSacParse() *osmparser.ParseResult {
 }
 
 // fastBridgeParse: public A(.80)<->B(.81)<->C(.82) (A→C public = 200) + a FAST
-// restricted cut-through A<->C (weight 10). through(A,C)=10 < 200 => shortcut => DROP.
+// restricted cut-through A<->C (weight 10). through(A,C)=10 < 200 => shortcut =>
+// kept but PENALIZED so it no longer beats the public path.
 func fastBridgeParse() *osmparser.ParseResult {
 	return &osmparser.ParseResult{
 		Edges: []osmparser.RawEdge{
@@ -48,7 +54,8 @@ func fastBridgeParse() *osmparser.ParseResult {
 }
 
 // interiorFastBridgeParse: public A(.80)<->B(.81)<->C(.82) + a fast restricted path
-// A<->R(.815)<->C through interior node R (5+5=10 < 200) => shortcut => DROP.
+// A<->R(.815)<->C through interior node R (5+5=10 < 200) => shortcut => kept but
+// PENALIZED so the through-path no longer beats the public path.
 func interiorFastBridgeParse() *osmparser.ParseResult {
 	return &osmparser.ParseResult{
 		Edges: []osmparser.RawEdge{
@@ -89,21 +96,32 @@ func TestFilterKeepsCulDeSac(t *testing.T) {
 	}
 }
 
-func TestFilterDropsFastBridge(t *testing.T) {
+func TestFilterPenalizesFastBridge(t *testing.T) {
 	g := FilterBridgingRestricted(Build(fastBridgeParse()))
-	if hasEdgeByLon(g, 103.80, 103.82) || hasEdgeByLon(g, 103.82, 103.80) {
-		t.Error("fast restricted cut-through A<->C should be dropped")
+	// The cut-through must survive (last-mile reachability) but with a weight
+	// that no longer beats the 200-cost public path A->B->C.
+	w := edgeWeightByLon(g, 103.80, 103.82)
+	if w == 0 {
+		t.Fatal("fast restricted cut-through A<->C should be kept (penalized), not dropped")
 	}
-	if !hasEdgeByLon(g, 103.80, 103.81) || !hasEdgeByLon(g, 103.81, 103.82) {
-		t.Error("public chain must be preserved")
+	if w < 200 {
+		t.Errorf("penalized cut-through weight %d must be >= public path cost 200", w)
+	}
+	if pub := edgeWeightByLon(g, 103.80, 103.81); pub != 100 {
+		t.Errorf("public edge weight must be unchanged, got %d", pub)
 	}
 }
 
-func TestFilterDropsInteriorFastBridge(t *testing.T) {
+func TestFilterPenalizesInteriorFastBridge(t *testing.T) {
 	g := FilterBridgingRestricted(Build(interiorFastBridgeParse()))
-	if hasEdgeByLon(g, 103.80, 103.815) || hasEdgeByLon(g, 103.815, 103.82) ||
-		hasEdgeByLon(g, 103.815, 103.80) || hasEdgeByLon(g, 103.82, 103.815) {
-		t.Error("fast restricted interior cut-through should be dropped")
+	// Both restricted legs survive, scaled so 2-leg through-cost >= public 200.
+	w1 := edgeWeightByLon(g, 103.80, 103.815)
+	w2 := edgeWeightByLon(g, 103.815, 103.82)
+	if w1 == 0 || w2 == 0 {
+		t.Fatal("fast restricted interior cut-through should be kept (penalized), not dropped")
+	}
+	if w1+w2 < 200 {
+		t.Errorf("penalized through-cost %d must be >= public path cost 200", w1+w2)
 	}
 }
 

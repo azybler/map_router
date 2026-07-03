@@ -76,9 +76,11 @@ var carHighways = map[string]bool{
 }
 
 // classifyAccess decides whether a car-class way is kept, and if kept whether it
-// is "restricted" (gated/private — usable for last-mile access, inlined later only
-// if it forms a cul-de-sac). access governs over motor_vehicle. access=destination
-// and access=customers stay PUBLIC (they route normally today).
+// is "restricted" (gated/private — usable for last-mile access; the
+// restricted-cluster filter later inlines or penalizes it). access governs over
+// motor_vehicle. access=destination and access=customers stay PUBLIC: Google
+// routes through them freely in this region, and restricting them measurably
+// hurt route agreement (round-3 sweep, 2026-07).
 func classifyAccess(tags osm.Tags) (keep, restricted bool) {
 	hw := tags.Find("highway")
 	if !carHighways[hw] || tags.Find("area") == "yes" {
@@ -97,6 +99,61 @@ func classifyAccess(tags osm.Tags) (keep, restricted bool) {
 		return true, true
 	}
 	return true, false
+}
+
+// physicalBarriers lists barrier node values that physically stop a car
+// regardless of permission (no boom to lift). Restrict unless explicitly open.
+var physicalBarriers = map[string]bool{
+	"bollard": true, "block": true, "chain": true, "cycle_barrier": true,
+	"motorcycle_barrier": true, "turnstile": true, "kissing_gate": true,
+	"stile": true, "log": true, "debris": true, "barrier_board": true,
+	"full-height_turnstile": true, "jersey_barrier": true, "sump_buster": true,
+	"planter": true, "rope": true,
+}
+
+// gateBarriers lists barrier node values that CAN open (gates/booms). Many
+// Malaysian guarded neighborhoods keep these open to general traffic, and
+// Google routes through them, so they restrict only when tagged explicitly
+// closed (access=no/private/… or locked=yes). Round-3 sweep (2026-07) showed
+// blanket gate restriction hurts route agreement.
+var gateBarriers = map[string]bool{
+	"gate": true, "lift_gate": true, "swing_gate": true, "sliding_gate": true,
+	"wicket_gate": true, "hampshire_gate": true,
+}
+
+// nodeBarrierRestricts reports whether a node's tags describe a barrier that
+// should make its adjacent edges restricted (last-mile only). An explicit
+// open access tag on the node (access/motor_vehicle = yes|permissive|
+// designated) always keeps the road public.
+func nodeBarrierRestricts(tags osm.Tags) bool {
+	b := tags.Find("barrier")
+	if b == "" || (!physicalBarriers[b] && !gateBarriers[b]) {
+		return false
+	}
+	switch tags.Find("motor_vehicle") {
+	case "yes", "permissive", "designated":
+		return false
+	}
+	switch tags.Find("access") {
+	case "yes", "permissive", "designated":
+		return false
+	}
+	if physicalBarriers[b] {
+		return true
+	}
+	// Gate-type barrier: restrict only when explicitly closed.
+	if tags.Find("locked") == "yes" {
+		return true
+	}
+	switch tags.Find("access") {
+	case "no", "private", "permit", "residents":
+		return true
+	}
+	switch tags.Find("motor_vehicle") {
+	case "no", "private":
+		return true
+	}
+	return false
 }
 
 // isCarAccessible reports whether a way is kept for car routing (ignoring the
@@ -244,6 +301,7 @@ func Parse(ctx context.Context, rs io.ReadSeeker, opts ...ParseOptions) (*ParseR
 
 	nodeLat := make(map[osm.NodeID]float64, len(referencedNodes))
 	nodeLon := make(map[osm.NodeID]float64, len(referencedNodes))
+	barrierNodes := make(map[osm.NodeID]struct{})
 
 	scanner = osmpbf.New(ctx, rs, 1)
 	scanner.SkipWays = true
@@ -262,6 +320,9 @@ func Parse(ctx context.Context, rs io.ReadSeeker, opts ...ParseOptions) (*ParseR
 
 		nodeLat[n.ID] = n.Lat
 		nodeLon[n.ID] = n.Lon
+		if nodeBarrierRestricts(n.Tags) {
+			barrierNodes[n.ID] = struct{}{}
+		}
 	}
 	if err := scanner.Err(); err != nil {
 		scanner.Close()
@@ -269,7 +330,7 @@ func Parse(ctx context.Context, rs io.ReadSeeker, opts ...ParseOptions) (*ParseR
 	}
 	scanner.Close()
 
-	log.Printf("Pass 2 complete: %d node coordinates collected", len(nodeLat))
+	log.Printf("Pass 2 complete: %d node coordinates collected, %d restrictive barrier nodes", len(nodeLat), len(barrierNodes))
 
 	// Build edges from ways.
 	var edges []RawEdge
@@ -305,12 +366,24 @@ func Parse(ctx context.Context, rs io.ReadSeeker, opts ...ParseOptions) (*ParseR
 				weight = computeWeightMs(dist, w.SpeedKmh)
 			}
 
+			// A restrictive barrier node (gate/bollard/…) makes its adjacent
+			// edges restricted, so the cluster filter treats crossing it as
+			// last-mile access rather than a public through-path.
+			restricted := w.Restricted
+			if !restricted {
+				if _, isBar := barrierNodes[fromID]; isBar {
+					restricted = true
+				} else if _, isBar := barrierNodes[toID]; isBar {
+					restricted = true
+				}
+			}
+
 			if w.Forward {
 				edges = append(edges, RawEdge{
 					FromNodeID: fromID,
 					ToNodeID:   toID,
 					Weight:     weight,
-					Restricted: w.Restricted,
+					Restricted: restricted,
 				})
 			}
 			if w.Backward {
@@ -318,7 +391,7 @@ func Parse(ctx context.Context, rs io.ReadSeeker, opts ...ParseOptions) (*ParseR
 					FromNodeID: toID,
 					ToNodeID:   fromID,
 					Weight:     weight,
-					Restricted: w.Restricted,
+					Restricted: restricted,
 				})
 			}
 		}

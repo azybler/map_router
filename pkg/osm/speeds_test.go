@@ -72,3 +72,42 @@ func TestLoadSpeedTable(t *testing.T) {
 		t.Error("expected error for missing file")
 	}
 }
+
+func TestFloorAndCapClassKmh(t *testing.T) {
+	jsonData := `{"floor_class_kmh":{"motorway":90},"cap_class_kmh":{"primary":60},"link_factor":0.5}`
+	tbl, err := ParseSpeedTable([]byte(jsonData))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tags := func(kv ...string) osm.Tags {
+		var ts osm.Tags
+		for i := 0; i+1 < len(kv); i += 2 {
+			ts = append(ts, osm.Tag{Key: kv[i], Value: kv[i+1]})
+		}
+		return ts
+	}
+	// Motorway tagged maxspeed=60 floors to 90.
+	if v := tbl.SpeedKmh(tags("highway", "motorway", "maxspeed", "60")); v != 90 {
+		t.Errorf("floored motorway = %v, want 90", v)
+	}
+	// Motorway tagged above the floor keeps its tag.
+	if v := tbl.SpeedKmh(tags("highway", "motorway", "maxspeed", "110")); v != 110 {
+		t.Errorf("fast motorway = %v, want 110", v)
+	}
+	// Motorway link floors at LinkFactor x floor = 45.
+	if v := tbl.SpeedKmh(tags("highway", "motorway_link", "maxspeed", "40")); v != 45 {
+		t.Errorf("floored motorway_link = %v, want 45", v)
+	}
+	// Primary tagged maxspeed=80 caps to 60.
+	if v := tbl.SpeedKmh(tags("highway", "primary", "maxspeed", "80")); v != 60 {
+		t.Errorf("capped primary = %v, want 60", v)
+	}
+	// Primary tagged below the cap keeps its tag.
+	if v := tbl.SpeedKmh(tags("highway", "primary", "maxspeed", "40")); v != 40 {
+		t.Errorf("slow primary = %v, want 40", v)
+	}
+	// Untagged classes unaffected by floor/cap of other classes.
+	if v := tbl.SpeedKmh(tags("highway", "residential")); v != DefaultSpeedTable().ClassKmh["residential"] {
+		t.Errorf("residential = %v, want default", v)
+	}
+}
