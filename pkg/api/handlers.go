@@ -11,20 +11,43 @@ import (
 	"github.com/azybler/map_router/pkg/routing"
 )
 
+// Routing metrics selectable via RouteRequest.Metric.
+const (
+	MetricTime     = "time"     // lowest travel time (default)
+	MetricDistance = "distance" // shortest physical road distance
+)
+
 // Handlers holds the HTTP handlers and their dependencies.
 type Handlers struct {
-	router routing.Router
-	stats  StatsResponse
+	routers map[string]routing.Router // keyed by metric name; MetricTime is required
+	stats   StatsResponse
 }
 
-// NewHandlers creates handlers with the given router.
+// NewHandlers creates handlers serving a single time-metric router.
+// Convenience wrapper over NewHandlersMulti for the common (time-only) case.
 func NewHandlers(router routing.Router, stats StatsResponse) *Handlers {
+	return NewHandlersMulti(map[string]routing.Router{MetricTime: router}, stats)
+}
+
+// NewHandlersMulti creates handlers that dispatch on the request metric.
+// routers must contain the MetricTime key (the default metric); panics
+// otherwise, since a server that cannot answer default requests is a
+// programming error, not a runtime condition. The map is copied so the
+// returned Handlers owns its dispatch table and is immune to later mutation
+// of the caller's map (the table is read concurrently by request handlers).
+func NewHandlersMulti(routers map[string]routing.Router, stats StatsResponse) *Handlers {
+	if _, ok := routers[MetricTime]; !ok {
+		panic("api.NewHandlersMulti: routers must include MetricTime")
+	}
+	m := make(map[string]routing.Router, len(routers))
+	for k, v := range routers {
+		m[k] = v
+	}
 	return &Handlers{
-		router: router,
-		stats:  stats,
+		routers: m,
+		stats:   stats,
 	}
 }
-
 
 // HandleRoute handles POST /api/v1/route.
 func (h *Handlers) HandleRoute(w http.ResponseWriter, r *http.Request) {
@@ -52,8 +75,23 @@ func (h *Handlers) HandleRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Resolve the routing metric (default: time). Existing clients omit this field.
+	metric := req.Metric
+	if metric == "" {
+		metric = MetricTime
+	}
+	if metric != MetricTime && metric != MetricDistance {
+		writeError(w, http.StatusBadRequest, "invalid_request", "metric")
+		return
+	}
+	router, ok := h.routers[metric]
+	if !ok {
+		writeError(w, http.StatusBadRequest, "metric_unavailable", "metric")
+		return
+	}
+
 	// Route.
-	result, err := h.router.Route(r.Context(), routing.LatLng{Lat: req.Start.Lat, Lng: req.Start.Lng}, routing.LatLng{Lat: req.End.Lat, Lng: req.End.Lng})
+	result, err := router.Route(r.Context(), routing.LatLng{Lat: req.Start.Lat, Lng: req.Start.Lng}, routing.LatLng{Lat: req.End.Lat, Lng: req.End.Lng})
 	if err != nil {
 		if errors.Is(err, routing.ErrPointTooFar) {
 			writeError(w, http.StatusUnprocessableEntity, "point_too_far_from_road", "")

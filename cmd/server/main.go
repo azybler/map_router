@@ -15,23 +15,77 @@ import (
 )
 
 func main() {
-	graphPath := flag.String("graph", "graph.bin", "Path to preprocessed graph binary")
+	graphPath := flag.String("graph", "graph.bin", "Path to preprocessed graph binary (time metric)")
+	graphDistance := flag.String("graph-distance", "", "Optional distance-weighted graph binary; enables metric=\"distance\" routing")
 	port := flag.Int("port", 8080, "HTTP port")
 	corsOrigin := flag.String("cors-origin", "", "CORS allowed origin (empty = same-origin)")
 	flag.Parse()
 
 	start := time.Now()
 
-	// Load graph.
-	log.Printf("Loading graph from %s...", *graphPath)
-	chg, err := graph.ReadBinary(*graphPath)
+	// Load the time graph (required).
+	log.Printf("Loading time graph from %s...", *graphPath)
+	timeEngine, timeCHG, err := loadEngine(*graphPath)
 	if err != nil {
-		log.Fatalf("Failed to load graph: %v", err)
+		log.Fatalf("Failed to load time graph: %v", err)
 	}
-	log.Printf("Loaded: %d nodes, %d fwd edges, %d bwd edges",
-		chg.NumNodes, len(chg.FwdHead), len(chg.BwdHead))
+	log.Printf("Loaded time graph: %d nodes, %d fwd edges, %d bwd edges",
+		timeCHG.NumNodes, len(timeCHG.FwdHead), len(timeCHG.BwdHead))
 
-	// Reconstruct original graph for snapping (R-tree needs real road edges).
+	// routers and availableMetrics are kept in lockstep: every metric registered
+	// in the map is also appended to availableMetrics (in a stable order), so the
+	// /stats advertisement can never drift from what the server can actually route.
+	routers := map[string]routing.Router{api.MetricTime: timeEngine}
+	availableMetrics := []string{api.MetricTime}
+
+	// Load the distance graph (optional).
+	if *graphDistance != "" {
+		log.Printf("Loading distance graph from %s...", *graphDistance)
+		distEngine, distCHG, err := loadEngine(*graphDistance)
+		if err != nil {
+			log.Fatalf("Failed to load distance graph: %v", err)
+		}
+		log.Printf("Loaded distance graph: %d nodes, %d fwd edges, %d bwd edges",
+			distCHG.NumNodes, len(distCHG.FwdHead), len(distCHG.BwdHead))
+		routers[api.MetricDistance] = distEngine
+		availableMetrics = append(availableMetrics, api.MetricDistance)
+	}
+
+	// Reclaim memory from init-time temporaries (R-tree construction doubles the
+	// heap each GC cycle). Return unused pages to the OS.
+	runtime.GC()
+	debug.FreeOSMemory()
+
+	log.Printf("Ready in %s (metrics: %v)", time.Since(start).Round(time.Millisecond), availableMetrics)
+
+	// Setup HTTP server.
+	addr := fmt.Sprintf(":%d", *port)
+	cfg := api.DefaultConfig(addr)
+	cfg.CORSOrigin = *corsOrigin
+
+	stats := api.StatsResponse{
+		NumNodes:         timeCHG.NumNodes,
+		NumFwdEdges:      len(timeCHG.FwdHead),
+		NumBwdEdges:      len(timeCHG.BwdHead),
+		AvailableMetrics: availableMetrics,
+	}
+
+	handlers := api.NewHandlersMulti(routers, stats)
+	srv := api.NewServer(cfg, handlers)
+
+	if err := api.ListenAndServe(srv); err != nil {
+		log.Printf("Server stopped: %v", err)
+		os.Exit(1)
+	}
+}
+
+// loadEngine reads a CH graph binary and builds a routing engine over it,
+// reconstructing the original graph needed for snapping and geometry.
+func loadEngine(path string) (*routing.Engine, *graph.CHGraph, error) {
+	chg, err := graph.ReadBinary(path)
+	if err != nil {
+		return nil, nil, err
+	}
 	origGraph := &graph.Graph{
 		NumNodes:    chg.NumNodes,
 		NumEdges:    uint32(len(chg.OrigHead)),
@@ -44,36 +98,5 @@ func main() {
 		GeoShapeLat: chg.GeoShapeLat,
 		GeoShapeLon: chg.GeoShapeLon,
 	}
-
-	// Build routing engine.
-	log.Println("Building spatial index...")
-	engine := routing.NewEngine(chg, origGraph)
-
-	// Reclaim memory from init-time temporaries. Without this, Go's heap
-	// retains peak RSS from index construction (GC doubles heap each cycle:
-	// 120→240→480→960→1920 MB). This returns unused pages to the OS.
-	runtime.GC()
-	debug.FreeOSMemory()
-
-	loadTime := time.Since(start)
-	log.Printf("Ready in %s", loadTime.Round(time.Millisecond))
-
-	// Setup HTTP server.
-	addr := fmt.Sprintf(":%d", *port)
-	cfg := api.DefaultConfig(addr)
-	cfg.CORSOrigin = *corsOrigin
-
-	stats := api.StatsResponse{
-		NumNodes:    chg.NumNodes,
-		NumFwdEdges: len(chg.FwdHead),
-		NumBwdEdges: len(chg.BwdHead),
-	}
-
-	handlers := api.NewHandlers(engine, stats)
-	srv := api.NewServer(cfg, handlers)
-
-	if err := api.ListenAndServe(srv); err != nil {
-		log.Printf("Server stopped: %v", err)
-		os.Exit(1)
-	}
+	return routing.NewEngine(chg, origGraph), chg, nil
 }

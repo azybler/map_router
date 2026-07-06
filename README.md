@@ -75,6 +75,7 @@ bin/map-router-server --graph graph.bin --port 8080
 Flags:
 
 - `--graph` — path to the preprocessed binary graph
+- `--graph-distance` — optional distance-weighted graph binary; enables `metric: "distance"` routing (omit for time-only)
 - `--port` — HTTP port (default: 8080)
 - `--cors-origin` — allowed CORS origin (optional)
 
@@ -92,9 +93,15 @@ Request:
 ```json
 {
   "start": { "lat": 1.3521, "lng": 103.8198 },
-  "end": { "lat": 1.2903, "lng": 103.8515 }
+  "end": { "lat": 1.2903, "lng": 103.8515 },
+  "metric": "distance"
 }
 ```
+
+`metric` is optional: `"time"` (default — lowest travel time) or `"distance"`
+(true shortest road distance). `"distance"` requires the server to be started
+with a distance graph (`--graph-distance`); otherwise it returns
+`metric_unavailable`. Omitting the field is identical to `"time"`.
 
 Response:
 
@@ -121,6 +128,8 @@ Errors:
 | 400 | `invalid_coordinates` | Coordinates out of range or non-finite |
 | 404 | `no_route_found` | No path between the two points |
 | 422 | `point_too_far_from_road` | Start or end point is more than 500m from a road |
+| 400 | `invalid_request` | Unknown `metric` (only `time`/`distance` are valid) |
+| 400 | `metric_unavailable` | Requested metric's graph is not loaded on this server |
 
 ### Health
 
@@ -136,7 +145,8 @@ Returns `{"status": "ok"}`.
 GET /api/v1/stats
 ```
 
-Returns node and edge counts for the loaded graph.
+Returns node and edge counts for the time graph, plus `available_metrics`
+(e.g. `["time","distance"]`) listing which metrics this server can route.
 
 ## Project Structure
 
