@@ -30,10 +30,21 @@ func NewHandlers(router routing.Router, stats StatsResponse) *Handlers {
 }
 
 // NewHandlersMulti creates handlers that dispatch on the request metric.
-// routers must contain at least the MetricTime key.
+// routers must contain the MetricTime key (the default metric); panics
+// otherwise, since a server that cannot answer default requests is a
+// programming error, not a runtime condition. The map is copied so the
+// returned Handlers owns its dispatch table and is immune to later mutation
+// of the caller's map (the table is read concurrently by request handlers).
 func NewHandlersMulti(routers map[string]routing.Router, stats StatsResponse) *Handlers {
+	if _, ok := routers[MetricTime]; !ok {
+		panic("api.NewHandlersMulti: routers must include MetricTime")
+	}
+	m := make(map[string]routing.Router, len(routers))
+	for k, v := range routers {
+		m[k] = v
+	}
 	return &Handlers{
-		routers: routers,
+		routers: m,
 		stats:   stats,
 	}
 }

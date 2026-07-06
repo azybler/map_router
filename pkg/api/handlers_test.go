@@ -288,3 +288,30 @@ func TestHandleStats_AvailableMetrics(t *testing.T) {
 		t.Errorf("available_metrics = %v, want [time distance]", resp.AvailableMetrics)
 	}
 }
+
+func TestNewHandlersMulti_RequiresTime(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Error("expected panic when routers lacks MetricTime")
+		}
+	}()
+	NewHandlersMulti(map[string]routing.Router{MetricDistance: &mockRouter{}}, StatsResponse{})
+}
+
+func TestNewHandlersMulti_CopiesRouters(t *testing.T) {
+	// The handler must own its dispatch table: mutating the caller's map after
+	// construction must not change which metrics the handler will serve.
+	src := map[string]routing.Router{MetricTime: &mockRouter{result: routeResult(111)}}
+	h := NewHandlersMulti(src, StatsResponse{})
+	src[MetricDistance] = &mockRouter{result: routeResult(222)}
+
+	w := postRoute(t, h, `{"start":{"lat":1.3,"lng":103.8},"end":{"lat":1.35,"lng":103.85},"metric":"distance"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (distance must not leak in via caller mutation)", w.Code)
+	}
+	var e ErrorResponse
+	json.Unmarshal(w.Body.Bytes(), &e)
+	if e.Error != "metric_unavailable" {
+		t.Errorf("error = %q, want metric_unavailable", e.Error)
+	}
+}
