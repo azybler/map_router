@@ -175,3 +175,113 @@ func TestHandleStats(t *testing.T) {
 		t.Errorf("NumNodes = %d, want 500000", resp.NumNodes)
 	}
 }
+
+// routeResult builds a RouteResult whose distance identifies which router ran.
+func routeResult(dist float64) *routing.RouteResult {
+	return &routing.RouteResult{
+		TotalDistanceMeters: dist,
+		Segments: []routing.Segment{
+			{DistanceMeters: dist, Geometry: []routing.LatLng{{Lat: 1, Lng: 2}}},
+		},
+	}
+}
+
+func postRoute(t *testing.T, h *Handlers, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest("POST", "/api/v1/route", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.HandleRoute(w, req)
+	return w
+}
+
+func TestHandleRoute_MetricDefaultsToTime(t *testing.T) {
+	h := NewHandlersMulti(map[string]routing.Router{
+		MetricTime:     &mockRouter{result: routeResult(111)},
+		MetricDistance: &mockRouter{result: routeResult(222)},
+	}, StatsResponse{})
+
+	w := postRoute(t, h, `{"start":{"lat":1.3,"lng":103.8},"end":{"lat":1.35,"lng":103.85}}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200. body: %s", w.Code, w.Body.String())
+	}
+	var resp RouteResponse
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.TotalDistanceMeters != 111 {
+		t.Errorf("default metric used wrong router: got %v, want time (111)", resp.TotalDistanceMeters)
+	}
+}
+
+func TestHandleRoute_MetricTimeExplicit(t *testing.T) {
+	h := NewHandlersMulti(map[string]routing.Router{
+		MetricTime:     &mockRouter{result: routeResult(111)},
+		MetricDistance: &mockRouter{result: routeResult(222)},
+	}, StatsResponse{})
+
+	w := postRoute(t, h, `{"start":{"lat":1.3,"lng":103.8},"end":{"lat":1.35,"lng":103.85},"metric":"time"}`)
+	var resp RouteResponse
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.TotalDistanceMeters != 111 {
+		t.Errorf("metric=time used wrong router: got %v, want 111", resp.TotalDistanceMeters)
+	}
+}
+
+func TestHandleRoute_MetricDistanceUsesDistanceRouter(t *testing.T) {
+	h := NewHandlersMulti(map[string]routing.Router{
+		MetricTime:     &mockRouter{result: routeResult(111)},
+		MetricDistance: &mockRouter{result: routeResult(222)},
+	}, StatsResponse{})
+
+	w := postRoute(t, h, `{"start":{"lat":1.3,"lng":103.8},"end":{"lat":1.35,"lng":103.85},"metric":"distance"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200. body: %s", w.Code, w.Body.String())
+	}
+	var resp RouteResponse
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.TotalDistanceMeters != 222 {
+		t.Errorf("metric=distance used wrong router: got %v, want distance (222)", resp.TotalDistanceMeters)
+	}
+}
+
+func TestHandleRoute_MetricUnavailable(t *testing.T) {
+	// Time-only handler (as when started without --graph-distance).
+	h := NewHandlers(&mockRouter{result: routeResult(111)}, StatsResponse{})
+
+	w := postRoute(t, h, `{"start":{"lat":1.3,"lng":103.8},"end":{"lat":1.35,"lng":103.85},"metric":"distance"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
+	}
+	var e ErrorResponse
+	json.Unmarshal(w.Body.Bytes(), &e)
+	if e.Error != "metric_unavailable" || e.Field != "metric" {
+		t.Errorf("error = %q field = %q, want metric_unavailable/metric", e.Error, e.Field)
+	}
+}
+
+func TestHandleRoute_MetricInvalid(t *testing.T) {
+	h := NewHandlers(&mockRouter{result: routeResult(111)}, StatsResponse{})
+
+	w := postRoute(t, h, `{"start":{"lat":1.3,"lng":103.8},"end":{"lat":1.35,"lng":103.85},"metric":"walking"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
+	}
+	var e ErrorResponse
+	json.Unmarshal(w.Body.Bytes(), &e)
+	if e.Error != "invalid_request" || e.Field != "metric" {
+		t.Errorf("error = %q field = %q, want invalid_request/metric", e.Error, e.Field)
+	}
+}
+
+func TestHandleStats_AvailableMetrics(t *testing.T) {
+	h := NewHandlers(&mockRouter{}, StatsResponse{AvailableMetrics: []string{"time", "distance"}})
+
+	req := httptest.NewRequest("GET", "/api/v1/stats", nil)
+	w := httptest.NewRecorder()
+	h.HandleStats(w, req)
+
+	var resp StatsResponse
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if len(resp.AvailableMetrics) != 2 || resp.AvailableMetrics[0] != "time" || resp.AvailableMetrics[1] != "distance" {
+		t.Errorf("available_metrics = %v, want [time distance]", resp.AvailableMetrics)
+	}
+}
