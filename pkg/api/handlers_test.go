@@ -219,6 +219,9 @@ func TestHandleRoute_MetricTimeExplicit(t *testing.T) {
 	}, StatsResponse{})
 
 	w := postRoute(t, h, `{"start":{"lat":1.3,"lng":103.8},"end":{"lat":1.35,"lng":103.85},"metric":"time"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200. body: %s", w.Code, w.Body.String())
+	}
 	var resp RouteResponse
 	json.Unmarshal(w.Body.Bytes(), &resp)
 	if resp.TotalDistanceMeters != 111 {

@@ -32,6 +32,9 @@ func main() {
 	log.Printf("Loaded time graph: %d nodes, %d fwd edges, %d bwd edges",
 		timeCHG.NumNodes, len(timeCHG.FwdHead), len(timeCHG.BwdHead))
 
+	// routers and availableMetrics are kept in lockstep: every metric registered
+	// in the map is also appended to availableMetrics (in a stable order), so the
+	// /stats advertisement can never drift from what the server can actually route.
 	routers := map[string]routing.Router{api.MetricTime: timeEngine}
 	availableMetrics := []string{api.MetricTime}
 
