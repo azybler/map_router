@@ -75,6 +75,7 @@ bin/map-router-server --graph graph.bin --port 8080
 Flags:
 
 - `--graph` — path to the preprocessed binary graph
+- `--graph-distance` — optional distance-weighted graph binary; enables `metric: "distance"` routing (omit for time-only)
 - `--port` — HTTP port (default: 8080)
 - `--cors-origin` — allowed CORS origin (optional)
 
