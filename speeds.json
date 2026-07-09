@@ -1,7 +1,7 @@
 {
   "class_kmh": {
-    "motorway": 100,
-    "trunk": 80,
+    "motorway": 90,
+    "trunk": 74,
     "primary": 48,
     "secondary": 33,
     "tertiary": 27,
@@ -20,6 +20,6 @@
   "floor_class_kmh": {
     "motorway": 80
   },
-  "link_factor": 0.7,
+  "link_factor": 0.45,
   "fallback": 30
 }
