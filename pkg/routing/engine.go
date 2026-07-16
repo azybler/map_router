@@ -94,6 +94,26 @@ func NewEngine(chg *graph.CHGraph, origGraph *graph.Graph) *Engine {
 	return e
 }
 
+// SnapCandidates returns up to k distinct road candidates within radiusMeters of
+// the given point, nearest first, snapped against this engine's own graph.
+//
+// Callers that later pass those candidates to RouteBetweenSnaps must obtain them
+// here rather than from a separately-constructed Snapper: SnapResult carries raw
+// EdgeIdx/NodeU/NodeV indices, which are only meaningful against the graph they
+// were produced from. Two graphs built from the same source (say a time-weighted
+// and a distance-weighted overlay) are not guaranteed to number nodes or edges
+// identically, and mixing them would silently address the wrong roads.
+func (e *Engine) SnapCandidates(lat, lng float64, k int, radiusMeters float64) []SnapResult {
+	return e.snapper.SnapCandidates(lat, lng, k, radiusMeters)
+}
+
+// SnapPoint returns the geographic position of a snap result produced by this
+// engine's SnapCandidates. Resolving a SnapResult against any other graph risks
+// reading a different road's coordinates — see SnapCandidates.
+func (e *Engine) SnapPoint(s SnapResult) (lat, lng float64) {
+	return snapLatLng(e.origGraph, s)
+}
+
 // Route computes the shortest path between two points.
 func (e *Engine) Route(ctx context.Context, start, end LatLng) (*RouteResult, error) {
 	// Step 1: Snap points to nearest road segments (multi-candidate, with an
@@ -157,6 +177,133 @@ func (e *Engine) Route(ctx context.Context, start, end LatLng) (*RouteResult, er
 			},
 		},
 	}, nil
+}
+
+// RouteBetweenSnaps computes the shortest path between two positions that are
+// already on the network, routing strictly between the two given snaps.
+//
+// Route is the wrong tool for this. Route re-snaps the coordinates it is handed
+// and seeds every candidate within 500 m at both ends, so the path it returns
+// may run between different roads than the ones asked about; and because it
+// measures distance from the geometry rather than from mu, the lateral hop it
+// silently took is absent from the result. For A-to-B navigation that is
+// desirable — any nearby road will do, and the user wants the best one. For map
+// matching it is fatal: the whole signal is the network distance between two
+// *specific* candidate positions, so substituting a nearer road erases the
+// quantity being measured and leaves parallel carriageways indistinguishable.
+//
+// No access penalty is applied. Both endpoints lie on the network by
+// construction, so there is no off-road access to price; a map matcher already
+// accounts for snap distance separately (as emission probability), and charging
+// it again here would double-count it.
+func (e *Engine) RouteBetweenSnaps(ctx context.Context, start, end SnapResult) (*RouteResult, error) {
+	g := e.origGraph
+	if int(start.EdgeIdx) >= len(g.Weight) || int(end.EdgeIdx) >= len(g.Weight) {
+		return nil, ErrPointTooFar
+	}
+
+	// Both positions on one segment: travel is a straight run along the chord,
+	// and a graph search cannot express it. The search can only leave an edge via
+	// an endpoint, so it would route out to a node and back — or, on a one-way,
+	// all the way around the block — reporting hundreds of metres for a few
+	// metres of travel.
+	if endRatio, ok := sameSegment(start, end); ok {
+		if res, ok := e.routeAlongEdge(start, end, endRatio); ok {
+			return res, nil
+		}
+		// Travelling backwards along a one-way edge: fall through to the search,
+		// which finds the legal way round.
+	}
+
+	qs := e.qsPool.Get().(*QueryState)
+	defer func() {
+		qs.Reset()
+		e.qsPool.Put(qs)
+	}()
+
+	seedForwardPenalty(qs, g, start, 0)
+	seedBackwardPenalty(qs, g, end, 0)
+
+	mu, meetNode := e.runCHDijkstra(ctx, qs)
+	if meetNode == noNode || mu == math.MaxUint32 {
+		return nil, ErrNoRoute
+	}
+
+	origNodes := unpackOverlayPath(e.chg, e.reconstructOverlayPath(meetNode, qs.PredFwd, qs.PredBwd))
+
+	// Anchor the geometry at exactly the positions asked about, so the reported
+	// distance covers the partial first and last edges and nothing else. Unlike
+	// Route, there is no candidate set to choose an anchor from — the caller
+	// named both endpoints, so they are used verbatim.
+	geometry := e.buildGeometry(origNodes)
+	sLat, sLng := snapLatLng(g, start)
+	eLat, eLng := snapLatLng(g, end)
+	if len(geometry) == 0 || geometry[0].Lat != sLat || geometry[0].Lng != sLng {
+		geometry = append([]LatLng{{Lat: sLat, Lng: sLng}}, geometry...)
+	}
+	if last := geometry[len(geometry)-1]; last.Lat != eLat || last.Lng != eLng {
+		geometry = append(geometry, LatLng{Lat: eLat, Lng: eLng})
+	}
+	totalDistMeters := polylineLengthMeters(geometry)
+
+	return &RouteResult{
+		TotalDistanceMeters: totalDistMeters,
+		DurationSeconds:     float64(mu) / 1000.0,
+		Segments: []Segment{
+			{
+				DistanceMeters: totalDistMeters,
+				Geometry:       geometry,
+			},
+		},
+	}, nil
+}
+
+// sameSegment reports whether two snaps lie on the same physical road segment,
+// returning end's position as a ratio along start's edge.
+//
+// Matching EdgeIdx is not sufficient. A two-way road is stored as two directed
+// edges over one pair of nodes, so two snaps on it can arrive either as the same
+// EdgeIdx or as opposite twins — and SnapCandidates collapses each twin pair
+// with a non-stable sort over identical distances, so which half a given query
+// point receives is not guaranteed to be consistent between nearby points.
+// Missing the twin case sends a few metres of travel into the graph search,
+// which can only leave via an endpoint and so reports the whole way round.
+func sameSegment(start, end SnapResult) (endRatio float64, ok bool) {
+	switch {
+	case start.EdgeIdx == end.EdgeIdx:
+		return end.Ratio, true
+	case start.NodeU == end.NodeV && start.NodeV == end.NodeU:
+		// Opposite twin: the same chord measured from the other end.
+		return 1 - end.Ratio, true
+	}
+	return 0, false
+}
+
+// routeAlongEdge handles two snaps sharing one segment, with endRatio expressed
+// along start's edge (see sameSegment). Returns ok=false when travel would run
+// against a one-way, leaving the caller to search for a legal route around.
+func (e *Engine) routeAlongEdge(start, end SnapResult, endRatio float64) (*RouteResult, bool) {
+	g := e.origGraph
+	if endRatio < start.Ratio && findEdge(g.FirstOut, g.Head, start.NodeV, start.NodeU) == noNode {
+		return nil, false
+	}
+
+	sLat, sLng := snapLatLng(g, start)
+	eLat, eLng := snapLatLng(g, end)
+	geometry := []LatLng{{Lat: sLat, Lng: sLng}, {Lat: eLat, Lng: eLng}}
+	totalDistMeters := polylineLengthMeters(geometry)
+	mu := uint32(math.Round(float64(g.Weight[start.EdgeIdx]) * math.Abs(endRatio-start.Ratio)))
+
+	return &RouteResult{
+		TotalDistanceMeters: totalDistMeters,
+		DurationSeconds:     float64(mu) / 1000.0,
+		Segments: []Segment{
+			{
+				DistanceMeters: totalDistMeters,
+				Geometry:       geometry,
+			},
+		},
+	}, true
 }
 
 // reconstructOverlayPath builds the full overlay node path from
@@ -253,10 +400,20 @@ func snapPointForCandidates(g *graph.Graph, cands []SnapResult, node uint32) (la
 	if best < 0 {
 		return 0, 0, false
 	}
-	c := cands[best]
-	lat = g.NodeLat[c.NodeU] + c.Ratio*(g.NodeLat[c.NodeV]-g.NodeLat[c.NodeU])
-	lng = g.NodeLon[c.NodeU] + c.Ratio*(g.NodeLon[c.NodeV]-g.NodeLon[c.NodeU])
+	lat, lng = snapLatLng(g, cands[best])
 	return lat, lng, true
+}
+
+// snapLatLng returns the position of a snap result, interpolated along its
+// edge's chord.
+//
+// Linear interpolation is exact here: the OSM parser emits one edge per
+// consecutive node pair and never populates intermediate shape points, and
+// SnapCandidates measures Ratio against that same u→v chord.
+func snapLatLng(g *graph.Graph, s SnapResult) (lat, lng float64) {
+	lat = g.NodeLat[s.NodeU] + s.Ratio*(g.NodeLat[s.NodeV]-g.NodeLat[s.NodeU])
+	lng = g.NodeLon[s.NodeU] + s.Ratio*(g.NodeLon[s.NodeV]-g.NodeLon[s.NodeU])
+	return lat, lng
 }
 
 // polylineLengthMeters sums the great-circle length of a lat/lng polyline.
@@ -272,9 +429,14 @@ func polylineLengthMeters(geom []LatLng) float64 {
 // direction: travel forward to v is always legal (edge u→v exists); travel
 // backward to u is legal only if the reverse edge v→u exists.
 func seedForward(qs *QueryState, g *graph.Graph, snap SnapResult) {
+	seedForwardPenalty(qs, g, snap, accessPenalty(g, snap))
+}
+
+// seedForwardPenalty is seedForward with an explicit access penalty, so callers
+// routing between positions already on the network can pass 0.
+func seedForwardPenalty(qs *QueryState, g *graph.Graph, snap SnapResult, pen uint32) {
 	u, v := snap.NodeU, snap.NodeV
 	weight := g.Weight[snap.EdgeIdx]
-	pen := accessPenalty(g, snap)
 
 	qs.seedFwdMin(v, uint32(math.Round(float64(weight)*(1-snap.Ratio)))+pen)
 	if findEdge(g.FirstOut, g.Head, v, u) != noNode {
@@ -286,9 +448,13 @@ func seedForward(qs *QueryState, g *graph.Graph, snap SnapResult) {
 // (travel u→v, stop at the point) is always legal; arriving from v requires the
 // reverse edge v→u to exist.
 func seedBackward(qs *QueryState, g *graph.Graph, snap SnapResult) {
+	seedBackwardPenalty(qs, g, snap, accessPenalty(g, snap))
+}
+
+// seedBackwardPenalty is seedBackward with an explicit access penalty.
+func seedBackwardPenalty(qs *QueryState, g *graph.Graph, snap SnapResult, pen uint32) {
 	u, v := snap.NodeU, snap.NodeV
 	weight := g.Weight[snap.EdgeIdx]
-	pen := accessPenalty(g, snap)
 
 	qs.seedBwdMin(u, uint32(math.Round(float64(weight)*snap.Ratio))+pen)
 	if findEdge(g.FirstOut, g.Head, v, u) != noNode {
