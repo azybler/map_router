@@ -15,7 +15,10 @@ import (
 
 func main() {
 	input := flag.String("input", "", "Path to .osm.pbf file")
-	output := flag.String("output", "graph.bin", "Output binary graph file path")
+	output := flag.String("output", "graph.bin", "Output combined binary graph file path (base + overlay in one file)")
+	outputBase := flag.String("output-base", "", "Write the metric-independent base (coords, topology, geometry) to this path instead of a combined --output")
+	outputOverlay := flag.String("output-overlay", "", "Write the metric-specific overlay (ranks, CH upward graph, edge weights) to this path; requires --output-base")
+	splitFrom := flag.String("split-from", "", "Convert an existing combined graph .bin into --output-base + --output-overlay without re-parsing OSM (ignores --input and all build options)")
 	bbox := flag.String("bbox", "", "Bounding box filter: minLat,minLng,maxLat,maxLng (e.g. 1.15,103.6,1.48,104.1)")
 	singapore := flag.Bool("singapore", false, "Shortcut for --bbox 1.15,103.6,1.48,104.1 (Singapore bounding box)")
 	kl := flag.Bool("kl", false, "Shortcut for --bbox 2.75,101.2,3.5,102.0 (Selangor + Kuala Lumpur bounding box)")
@@ -24,8 +27,27 @@ func main() {
 	minComponent := flag.Int("min-component", 0, "Keep every strongly-connected road network with >= N nodes (0: keep only the largest, default). Use a small value like 2 to retain disconnected networks such as islands, e.g. Tasmania for all-of-Australia coverage")
 	flag.Parse()
 
+	// --output-base and --output-overlay are a pair: either both name the two
+	// halves of the split format, or neither does (combined --output).
+	split := *outputBase != "" || *outputOverlay != ""
+	if split && (*outputBase == "" || *outputOverlay == "") {
+		log.Fatal("--output-base and --output-overlay must be used together")
+	}
+
+	// Conversion mode: split an existing combined graph without touching OSM.
+	if *splitFrom != "" {
+		if !split {
+			log.Fatal("--split-from requires both --output-base and --output-overlay")
+		}
+		if err := splitCombined(*splitFrom, *outputBase, *outputOverlay); err != nil {
+			log.Fatalf("Failed to split %s: %v", *splitFrom, err)
+		}
+		return
+	}
+
 	if *input == "" {
-		fmt.Fprintln(os.Stderr, "Usage: preprocess --input <file.osm.pbf> [--output graph.bin] [--singapore | --kl | --bbox minLat,minLng,maxLat,maxLng] [--speeds <table.json> | --distance]")
+		fmt.Fprintln(os.Stderr, "Usage: preprocess --input <file.osm.pbf> [--output graph.bin | --output-base base.bin --output-overlay overlay.bin] [--singapore | --kl | --bbox minLat,minLng,maxLat,maxLng] [--speeds <table.json> | --distance]")
+		fmt.Fprintln(os.Stderr, "       preprocess --split-from combined.bin --output-base base.bin --output-overlay overlay.bin")
 		os.Exit(1)
 	}
 
@@ -113,13 +135,56 @@ func main() {
 	chResult := ch.Contract(g)
 	log.Printf("CH complete: %d fwd edges, %d bwd edges", len(chResult.FwdHead), len(chResult.BwdHead))
 
-	// Step 5: Serialize to binary.
-	log.Printf("Writing binary to %s...", *output)
-	if err := graph.WriteBinary(*output, chResult); err != nil {
-		log.Fatalf("Failed to write binary: %v", err)
+	// Step 5: Serialize to binary — either one combined file or a split
+	// base + overlay pair.
+	if split {
+		log.Printf("Writing base to %s and overlay to %s...", *outputBase, *outputOverlay)
+		if err := graph.WriteBase(*outputBase, chResult); err != nil {
+			log.Fatalf("Failed to write base: %v", err)
+		}
+		if err := graph.WriteOverlay(*outputOverlay, chResult); err != nil {
+			log.Fatalf("Failed to write overlay: %v", err)
+		}
+		logSize("base", *outputBase)
+		logSize("overlay", *outputOverlay)
+	} else {
+		log.Printf("Writing binary to %s...", *output)
+		if err := graph.WriteBinary(*output, chResult); err != nil {
+			log.Fatalf("Failed to write binary: %v", err)
+		}
+		logSize("output", *output)
 	}
+	log.Printf("Done in %s.", time.Since(start).Round(time.Second))
+}
 
-	info, _ := os.Stat(*output)
-	elapsed := time.Since(start)
-	log.Printf("Done in %s. Output: %s (%.1f MB)", elapsed.Round(time.Second), *output, float64(info.Size())/(1024*1024))
+// splitCombined reads an existing combined graph binary and re-serializes it as a
+// base + overlay pair, so already-built graphs migrate to the split format in
+// seconds without re-parsing OSM.
+func splitCombined(combinedPath, basePath, overlayPath string) error {
+	log.Printf("Reading combined graph from %s...", combinedPath)
+	chg, err := graph.ReadBinary(combinedPath)
+	if err != nil {
+		return err
+	}
+	log.Printf("Loaded %d nodes, %d orig edges, %d fwd / %d bwd overlay edges",
+		chg.NumNodes, len(chg.OrigHead), len(chg.FwdHead), len(chg.BwdHead))
+
+	log.Printf("Writing base to %s...", basePath)
+	if err := graph.WriteBase(basePath, chg); err != nil {
+		return fmt.Errorf("write base: %w", err)
+	}
+	log.Printf("Writing overlay to %s...", overlayPath)
+	if err := graph.WriteOverlay(overlayPath, chg); err != nil {
+		return fmt.Errorf("write overlay: %w", err)
+	}
+	logSize("base", basePath)
+	logSize("overlay", overlayPath)
+	return nil
+}
+
+// logSize prints the on-disk size of a just-written file.
+func logSize(label, path string) {
+	if info, err := os.Stat(path); err == nil {
+		log.Printf("  %s: %s (%.1f MB)", label, path, float64(info.Size())/(1024*1024))
+	}
 }

@@ -81,12 +81,26 @@ type Engine struct {
 	qsPool    sync.Pool
 }
 
-// NewEngine creates a routing engine from a CH graph and the original graph.
+// NewEngine creates a routing engine from a CH graph and the original graph,
+// building a Snapper over origGraph.
 func NewEngine(chg *graph.CHGraph, origGraph *graph.Graph) *Engine {
+	return NewEngineWithSnapper(chg, origGraph, NewSnapper(origGraph))
+}
+
+// NewEngineWithSnapper creates a routing engine over a pre-built Snapper. This
+// lets several metric engines built from one shared base share a single Snapper
+// (the grid index is metric-independent — it reads only topology and coords, no
+// weights), so the server holds one index instead of one per metric.
+//
+// The snapper MUST have been built from a graph whose node and edge numbering
+// matches origGraph — i.e. the same shared base. Snapping produces raw
+// EdgeIdx/NodeU/NodeV indices, and resolving them against a differently-numbered
+// graph would silently address the wrong roads (see SnapCandidates).
+func NewEngineWithSnapper(chg *graph.CHGraph, origGraph *graph.Graph, snapper *Snapper) *Engine {
 	e := &Engine{
 		chg:       chg,
 		origGraph: origGraph,
-		snapper:   NewSnapper(origGraph),
+		snapper:   snapper,
 	}
 	e.qsPool.New = func() any {
 		return NewQueryState(chg.NumNodes)

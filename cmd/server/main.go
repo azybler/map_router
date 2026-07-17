@@ -15,17 +15,42 @@ import (
 )
 
 func main() {
-	graphPath := flag.String("graph", "graph.bin", "Path to preprocessed graph binary (time metric)")
-	graphDistance := flag.String("graph-distance", "", "Optional distance-weighted graph binary; enables metric=\"distance\" routing")
+	graphPath := flag.String("graph", "graph.bin", "Path to the time-metric graph: a combined binary, or a time overlay when --graph-base is set")
+	graphDistance := flag.String("graph-distance", "", "Optional distance graph: a combined binary, or a distance overlay when --graph-base is set; enables metric=\"distance\" routing")
+	graphBase := flag.String("graph-base", "", "Optional shared base file (coords, topology, geometry). When set, --graph and --graph-distance are overlay files stitched onto this one base, so the base and its Snapper are held once in RAM instead of per metric")
 	port := flag.Int("port", 8080, "HTTP port")
 	corsOrigin := flag.String("cors-origin", "", "CORS allowed origin (empty = same-origin)")
 	flag.Parse()
 
 	start := time.Now()
 
+	// loadTime/loadDist resolve to either the combined path (each graph
+	// self-contained, its own Snapper) or the split path (one shared base +
+	// Snapper, per-metric overlays), depending on whether --graph-base is set.
+	loadTime := func() (*routing.Engine, *graph.CHGraph, error) { return loadEngine(*graphPath) }
+	loadDist := func() (*routing.Engine, *graph.CHGraph, error) { return loadEngine(*graphDistance) }
+
+	if *graphBase != "" {
+		log.Printf("Loading shared base from %s...", *graphBase)
+		base, err := graph.ReadBase(*graphBase)
+		if err != nil {
+			log.Fatalf("Failed to load base graph: %v", err)
+		}
+		// One Snapper over the base, shared by every metric engine (the grid
+		// index is metric-independent).
+		sharedSnapper := routing.NewSnapper(base.Graph(nil))
+		log.Printf("Loaded base: %d nodes, %d orig edges (shared Snapper built)", base.NumNodes, len(base.OrigHead))
+		loadTime = func() (*routing.Engine, *graph.CHGraph, error) {
+			return loadOverlayEngine(base, sharedSnapper, *graphPath)
+		}
+		loadDist = func() (*routing.Engine, *graph.CHGraph, error) {
+			return loadOverlayEngine(base, sharedSnapper, *graphDistance)
+		}
+	}
+
 	// Load the time graph (required).
 	log.Printf("Loading time graph from %s...", *graphPath)
-	timeEngine, timeCHG, err := loadEngine(*graphPath)
+	timeEngine, timeCHG, err := loadTime()
 	if err != nil {
 		log.Fatalf("Failed to load time graph: %v", err)
 	}
@@ -41,7 +66,7 @@ func main() {
 	// Load the distance graph (optional).
 	if *graphDistance != "" {
 		log.Printf("Loading distance graph from %s...", *graphDistance)
-		distEngine, distCHG, err := loadEngine(*graphDistance)
+		distEngine, distCHG, err := loadDist()
 		if err != nil {
 			log.Fatalf("Failed to load distance graph: %v", err)
 		}
@@ -99,4 +124,17 @@ func loadEngine(path string) (*routing.Engine, *graph.CHGraph, error) {
 		GeoShapeLon: chg.GeoShapeLon,
 	}
 	return routing.NewEngine(chg, origGraph), chg, nil
+}
+
+// loadOverlayEngine stitches a metric overlay onto the shared base and builds an
+// engine over the shared Snapper. The base's coords/topology/geometry slices are
+// shared (not copied) across every metric; only the overlay and the metric's
+// original-edge weights are per-engine.
+func loadOverlayEngine(base *graph.BaseGraph, snapper *routing.Snapper, overlayPath string) (*routing.Engine, *graph.CHGraph, error) {
+	chg, err := graph.ReadOverlay(overlayPath, base)
+	if err != nil {
+		return nil, nil, err
+	}
+	origGraph := base.Graph(chg.OrigWeight)
+	return routing.NewEngineWithSnapper(chg, origGraph, snapper), chg, nil
 }
