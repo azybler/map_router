@@ -52,6 +52,7 @@ Flags:
 - `--output` — path for the binary graph output
 - `--singapore` — filter to Singapore bounding box
 - `--kl` — filter to Kuala Lumpur bounding box
+- `--wmy` — filter to West (Peninsular) Malaysia bounding box (1.25,99.6 → 6.75,104.35)
 - `--bbox lat_min,lng_min,lat_max,lng_max` — custom bounding box
 - `--distance` — weight edges by physical road length (shortest-**distance** routing) instead of travel time; ignores `--speeds`
 - `--min-component N` — keep every strongly-connected road network with ≥ `N` nodes (`0` = largest only, default). Use a small value like `2` to retain disconnected networks such as islands (e.g. Tasmania)
