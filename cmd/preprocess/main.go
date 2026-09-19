@@ -22,6 +22,7 @@ func main() {
 	bbox := flag.String("bbox", "", "Bounding box filter: minLat,minLng,maxLat,maxLng (e.g. 1.15,103.6,1.48,104.1)")
 	singapore := flag.Bool("singapore", false, "Shortcut for --bbox 1.15,103.6,1.48,104.1 (Singapore bounding box)")
 	kl := flag.Bool("kl", false, "Shortcut for --bbox 2.75,101.2,3.5,102.0 (Selangor + Kuala Lumpur bounding box)")
+	wmy := flag.Bool("wmy", false, "Shortcut for --bbox 1.25,99.6,6.75,104.35 (West / Peninsular Malaysia incl. Penang and Langkawi; Singapore falls inside the rectangle too)")
 	speeds := flag.String("speeds", "", "Path to a JSON speed table (default: built-in Malaysian priors)")
 	distance := flag.Bool("distance", false, "Weight edges by physical road length (shortest-distance routing) instead of travel time; ignores --speeds")
 	minComponent := flag.Int("min-component", 0, "Keep every strongly-connected road network with >= N nodes (0: keep only the largest, default). Use a small value like 2 to retain disconnected networks such as islands, e.g. Tasmania for all-of-Australia coverage")
@@ -46,7 +47,7 @@ func main() {
 	}
 
 	if *input == "" {
-		fmt.Fprintln(os.Stderr, "Usage: preprocess --input <file.osm.pbf> [--output graph.bin | --output-base base.bin --output-overlay overlay.bin] [--singapore | --kl | --bbox minLat,minLng,maxLat,maxLng] [--speeds <table.json> | --distance]")
+		fmt.Fprintln(os.Stderr, "Usage: preprocess --input <file.osm.pbf> [--output graph.bin | --output-base base.bin --output-overlay overlay.bin] [--singapore | --kl | --wmy | --bbox minLat,minLng,maxLat,maxLng] [--speeds <table.json> | --distance]")
 		fmt.Fprintln(os.Stderr, "       preprocess --split-from combined.bin --output-base base.bin --output-overlay overlay.bin")
 		os.Exit(1)
 	}
@@ -56,6 +57,9 @@ func main() {
 	if *kl {
 		opts.BBox = osmparser.BBox{MinLat: 2.75, MaxLat: 3.5, MinLng: 101.2, MaxLng: 102.0}
 		log.Println("Using Selangor + KL bounding box filter: lat [2.75, 3.50], lng [101.20, 102.00]")
+	} else if *wmy {
+		opts.BBox = osmparser.BBox{MinLat: 1.25, MaxLat: 6.75, MinLng: 99.6, MaxLng: 104.35}
+		log.Println("Using West Malaysia bounding box filter: lat [1.25, 6.75], lng [99.60, 104.35]")
 	} else if *singapore {
 		opts.BBox = osmparser.BBox{MinLat: 1.15, MaxLat: 1.48, MinLng: 103.6, MaxLng: 104.1}
 		log.Println("Using Singapore bounding box filter: lat [1.15, 1.48], lng [103.6, 104.1]")
