@@ -1,5 +1,7 @@
 package graph
 
+import "slices"
+
 // CHGraph holds the output of contraction hierarchies preprocessing.
 type CHGraph struct {
 	NumNodes uint32
@@ -28,6 +30,43 @@ type CHGraph struct {
 	GeoFirstOut []uint32
 	GeoShapeLat []float64
 	GeoShapeLon []float64
+
+	// Penalties lists the original edges whose OrigWeight carries a
+	// restricted-road penalty, with their weights without it. nil when the graph
+	// was written before penalties were recorded: OrigWeight is then all there is.
+	Penalties *EdgePenalties
+}
+
+// EdgePenalties records which edges FilterBridgingRestricted penalized and what
+// each would weigh without its penalty. A penalty is a routing preference (stay
+// out of gated estates unless one is the destination), not a cost of driving
+// the road, so anything reporting travel time must undo it.
+//
+// It is sparse: penalized edges are a small fraction of a road network, and
+// every edge not listed weighs exactly its Weight.
+type EdgePenalties struct {
+	Edges       []uint32 // ascending edge indices
+	Unpenalized []uint32 // Unpenalized[i] is edge Edges[i]'s weight without its penalty
+}
+
+// UnpenalizedWeight returns the weight of edge e without its restricted-road
+// penalty, given its (possibly penalized) weight w. p may be nil.
+func (p *EdgePenalties) UnpenalizedWeight(e, w uint32) uint32 {
+	if u, ok := p.lookup(e); ok {
+		return u
+	}
+	return w
+}
+
+// lookup returns edge e's unpenalized weight, ok=false if e is not penalized.
+func (p *EdgePenalties) lookup(e uint32) (uint32, bool) {
+	if p == nil {
+		return 0, false
+	}
+	if i, ok := slices.BinarySearch(p.Edges, e); ok {
+		return p.Unpenalized[i], true
+	}
+	return 0, false
 }
 
 // BaseGraph holds the metric-independent parts of a CH graph: node coordinates,
@@ -92,6 +131,10 @@ type Graph struct {
 	// consumed by FilterBridgingRestricted at preprocess time; NOT serialized
 	// (nil after a binary load — the server treats all edges as normal).
 	EdgeRestricted []bool // len: NumEdges (build-time only)
+
+	// Penalties records the edges FilterBridgingRestricted penalized (build-time;
+	// ch.Contract carries it into the CHGraph). nil if the filter has not run.
+	Penalties *EdgePenalties
 
 	NodeLat []float64 // len: NumNodes
 	NodeLon []float64 // len: NumNodes

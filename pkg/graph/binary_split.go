@@ -65,7 +65,7 @@ func topologyIdentity(numNodes uint32, nodeLat, nodeLon []float64, origFirstOut,
 
 // WriteBase serializes the metric-independent half of a CHGraph to a base file.
 func WriteBase(path string, chg *CHGraph) error {
-	return writeSplitFile(path, func(w io.Writer) error {
+	return writeSplitFile(path, nil, func(w io.Writer) error {
 		hdr := baseHeader{
 			Version:      splitVersion,
 			NumNodes:     chg.NumNodes,
@@ -103,9 +103,10 @@ func WriteBase(path string, chg *CHGraph) error {
 }
 
 // WriteOverlay serializes the metric-specific half of a CHGraph to an overlay
-// file, stamped with the paired base's topology identity.
+// file, stamped with the paired base's topology identity. Its Penalties go in a
+// trailing chunk (see binary_chunks.go).
 func WriteOverlay(path string, chg *CHGraph) error {
-	return writeSplitFile(path, func(w io.Writer) error {
+	return writeSplitFile(path, graphChunks(chg), func(w io.Writer) error {
 		var numShortcuts uint32
 		for _, m := range chg.FwdMiddle {
 			if m >= 0 {
@@ -310,6 +311,9 @@ func ReadOverlay(path string, base *BaseGraph) (*CHGraph, error) {
 	if err := verifyCRC(f, &crcReader); err != nil {
 		return nil, err
 	}
+	if err := readChunks(f, chg); err != nil {
+		return nil, err
+	}
 
 	if err := validateCSR(chg.FwdFirstOut, chg.FwdHead, hdr.NumNodes); err != nil {
 		return nil, fmt.Errorf("forward CSR invalid: %w", err)
@@ -321,9 +325,9 @@ func ReadOverlay(path string, base *BaseGraph) (*CHGraph, error) {
 }
 
 // writeSplitFile runs body against a CRC-wrapping writer over a temp file, then
-// appends the CRC32 trailer and atomically renames into place. Mirrors the
-// durability contract of WriteBinary.
-func writeSplitFile(path string, body func(w io.Writer) error) error {
+// appends the CRC32 trailer and any chunks, and atomically renames into place.
+// Mirrors the durability contract of WriteBinary.
+func writeSplitFile(path string, chunks []chunk, body func(w io.Writer) error) error {
 	tmpPath := path + ".tmp"
 	f, err := os.Create(tmpPath)
 	if err != nil {
@@ -341,6 +345,9 @@ func writeSplitFile(path string, body func(w io.Writer) error) error {
 
 	if err := binary.Write(f, binary.LittleEndian, crcWriter.hash.Sum32()); err != nil {
 		return fmt.Errorf("write CRC32: %w", err)
+	}
+	if err := writeChunks(f, chunks); err != nil {
+		return err
 	}
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("close temp file: %w", err)

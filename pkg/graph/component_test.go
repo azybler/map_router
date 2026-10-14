@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"maps"
 	"testing"
 
 	"github.com/paulmach/osm"
@@ -182,5 +183,41 @@ func TestFilterToComponentEmptyGraph(t *testing.T) {
 	filtered := FilterToComponent(g, nil)
 	if filtered.NumNodes != 0 || filtered.NumEdges != 0 {
 		t.Errorf("expected empty graph, got %d nodes, %d edges", filtered.NumNodes, filtered.NumEdges)
+	}
+}
+
+// TestFilterToComponentKeepsPenalties checks penalties follow their edges through
+// FilterToComponent's renumbering. The dropped fragment is listed first, so its
+// nodes and edges take the lowest indices and every kept edge shifts down.
+func TestFilterToComponentKeepsPenalties(t *testing.T) {
+	p := fastBridgeParse()
+	p.Edges = append([]osmparser.RawEdge{
+		{FromNodeID: 91, ToNodeID: 92, Weight: 7}, {FromNodeID: 92, ToNodeID: 91, Weight: 7},
+	}, p.Edges...)
+	p.NodeLat[91], p.NodeLon[91] = 2.0, 105.0
+	p.NodeLat[92], p.NodeLon[92] = 2.0, 105.1
+
+	g := FilterBridgingRestricted(Build(p))
+	kept := FilterToComponent(g, LargestComponent(g))
+	if kept.NumNodes != 3 {
+		t.Fatalf("kept %d nodes, want the 3-node component", kept.NumNodes)
+	}
+
+	got := penaltiesByLon(t, kept)
+	want := map[[2]float64]uint32{{103.80, 103.82}: 10, {103.82, 103.80}: 10}
+	if !maps.Equal(got, want) {
+		t.Errorf("penalties after renumbering = %v, want %v", got, want)
+	}
+	for _, e := range kept.Penalties.Edges {
+		if kept.Weight[e] <= 10 {
+			t.Errorf("edge %d: weight %d is not the penalized cut-through", e, kept.Weight[e])
+		}
+	}
+}
+
+func TestFilterToComponentWithoutPenalties(t *testing.T) {
+	g := Build(fastBridgeParse())
+	if kept := FilterToComponent(g, LargestComponent(g)); kept.Penalties != nil {
+		t.Errorf("Penalties = %+v, want nil when the restricted filter never ran", kept.Penalties)
 	}
 }

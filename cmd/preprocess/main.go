@@ -110,13 +110,14 @@ func main() {
 	g := graph.Build(parseResult)
 	log.Printf("Graph: %d nodes, %d edges", g.NumNodes, g.NumEdges)
 
-	// Inline cul-de-sac private/gated roads (access=private/permit/residents) so
-	// gated delivery endpoints are reachable; drop restricted clusters that could
-	// be through-shortcuts. Must run before component extraction + contraction.
-	beforeEdges := g.NumEdges
+	// Keep private/gated roads (access=private/permit/residents) so gated
+	// delivery endpoints are reachable, penalizing the clusters that would
+	// otherwise be through-shortcuts; their unpenalized weights are recorded so
+	// reported travel times exclude the penalty. Must run before component
+	// extraction + contraction.
 	g = graph.FilterBridgingRestricted(g)
-	log.Printf("Private-road filter: %d -> %d edges (dropped %d bridging-restricted)",
-		beforeEdges, g.NumEdges, beforeEdges-g.NumEdges)
+	log.Printf("Private-road filter: %d edges, %d penalized as restricted cut-throughs",
+		g.NumEdges, penalizedEdges(g.Penalties))
 
 	// Step 3: Extract connected road network(s).
 	beforeComponent := g.NumNodes
@@ -132,7 +133,7 @@ func main() {
 		len(componentNodes), float64(len(componentNodes))/float64(beforeComponent)*100,
 		int(beforeComponent)-len(componentNodes))
 	g = graph.FilterToComponent(g, componentNodes)
-	log.Printf("Filtered graph: %d nodes, %d edges", g.NumNodes, g.NumEdges)
+	log.Printf("Filtered graph: %d nodes, %d edges (%d penalized)", g.NumNodes, g.NumEdges, penalizedEdges(g.Penalties))
 
 	// Step 4: Contract CH.
 	log.Println("Running Contraction Hierarchies...")
@@ -172,6 +173,11 @@ func splitCombined(combinedPath, basePath, overlayPath string) error {
 	}
 	log.Printf("Loaded %d nodes, %d orig edges, %d fwd / %d bwd overlay edges",
 		chg.NumNodes, len(chg.OrigHead), len(chg.FwdHead), len(chg.BwdHead))
+	if chg.Penalties == nil {
+		log.Printf("WARNING: %s predates penalty recording; its travel times will include restricted-road penalties until it is rebuilt from OSM", combinedPath)
+	} else {
+		log.Printf("Penalized edges: %d", len(chg.Penalties.Edges))
+	}
 
 	log.Printf("Writing base to %s...", basePath)
 	if err := graph.WriteBase(basePath, chg); err != nil {
@@ -184,6 +190,14 @@ func splitCombined(combinedPath, basePath, overlayPath string) error {
 	logSize("base", basePath)
 	logSize("overlay", overlayPath)
 	return nil
+}
+
+// penalizedEdges counts the edges p lists (0 when none were recorded).
+func penalizedEdges(p *graph.EdgePenalties) int {
+	if p == nil {
+		return 0
+	}
+	return len(p.Edges)
 }
 
 // logSize prints the on-disk size of a just-written file.

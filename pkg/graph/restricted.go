@@ -33,8 +33,9 @@ const maxRestrictedPenaltyFactor = 50.0
 // destinations — matching Google's behavior — without becoming cut-throughs.
 // Clusters with ≤1 gateway are always inlined at normal weight (no pair to
 // shortcut). Public edges are always kept. The returned graph carries no
-// restricted flags. Note the reported route distance is measured from geometry,
-// not weight, so penalties never distort distances.
+// restricted flags, but records every penalized edge's unpenalized weight in
+// Penalties. Penalties never distort reported routes: distance is measured from
+// geometry, and duration from unpenalized weights.
 //
 // If g.EdgeRestricted is nil, g is returned unchanged.
 func FilterBridgingRestricted(g *Graph) *Graph {
@@ -89,12 +90,15 @@ func FilterBridgingRestricted(g *Graph) *Graph {
 	log.Printf("restricted clusters: %d multi-gateway (%d inlined, %d penalized as shortcuts, %d penalized at settle-cap); %d cul-de-sac inlined",
 		nMulti, nInlined, nPenalized, nCapPenalized, len(gateways)-nMulti)
 
-	// Rebuild CSR: every edge survives; restricted edges of shortcut clusters
-	// carry their cluster's penalty factor.
+	// Rebuild CSR: every edge survives, in its original order (so edge indices
+	// are unchanged); restricted edges of shortcut clusters carry their
+	// cluster's penalty factor, and their unpenalized weight is recorded so
+	// travel time can still be reported truthfully.
 	hasGeo := g.GeoFirstOut != nil
 	firstOut := make([]uint32, n+1)
 	var head, weight, geoFirstOut []uint32
 	var geoLat, geoLon []float64
+	penalties := &EdgePenalties{}
 	for u := uint32(0); u < n; u++ {
 		firstOut[u] = uint32(len(head))
 		for e := g.FirstOut[u]; e < g.FirstOut[u+1]; e++ {
@@ -106,6 +110,10 @@ func FilterBridgingRestricted(g *Graph) *Graph {
 						w = ^uint32(0)
 					} else {
 						w = uint32(scaled)
+					}
+					if w != g.Weight[e] {
+						penalties.Edges = append(penalties.Edges, uint32(len(head)))
+						penalties.Unpenalized = append(penalties.Unpenalized, g.Weight[e])
 					}
 				}
 			}
@@ -136,6 +144,7 @@ func FilterBridgingRestricted(g *Graph) *Graph {
 		GeoShapeLat: geoLat,
 		GeoShapeLon: geoLon,
 		// EdgeRestricted intentionally nil — survivors are ordinary edges.
+		Penalties: penalties,
 	}
 }
 
