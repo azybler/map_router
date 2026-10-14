@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"maps"
 	"testing"
 
 	"github.com/paulmach/osm"
@@ -133,5 +134,48 @@ func TestFilterKeepsSlowMultiGateEstate(t *testing.T) {
 	}
 	if !hasEdgeByLon(g, 103.80, 103.81) || !hasEdgeByLon(g, 103.81, 103.82) {
 		t.Error("public chain must be preserved")
+	}
+}
+
+// penaltiesByLon maps each edge g.Penalties lists, keyed by the longitudes of its
+// endpoints, to its recorded unpenalized weight.
+func penaltiesByLon(t *testing.T, g *Graph) map[[2]float64]uint32 {
+	t.Helper()
+	if g.Penalties == nil {
+		t.Fatal("Penalties not recorded")
+	}
+	m := map[[2]float64]uint32{}
+	for i, e := range g.Penalties.Edges {
+		u := uint32(0)
+		for g.FirstOut[u+1] <= e {
+			u++
+		}
+		m[[2]float64{g.NodeLon[u], g.NodeLon[g.Head[e]]}] = g.Penalties.Unpenalized[i]
+	}
+	return m
+}
+
+func TestFilterRecordsPenalizedWeights(t *testing.T) {
+	g := FilterBridgingRestricted(Build(fastBridgeParse()))
+	got := penaltiesByLon(t, g)
+	want := map[[2]float64]uint32{{103.80, 103.82}: 10, {103.82, 103.80}: 10}
+	if !maps.Equal(got, want) {
+		t.Errorf("penalties = %v, want both cut-through edges at their unpenalized weight 10: %v", got, want)
+	}
+	if w := edgeWeightByLon(g, 103.80, 103.82); w <= 10 {
+		t.Errorf("cut-through weight %d should still carry its penalty", w)
+	}
+}
+
+func TestFilterRecordsNoPenaltiesForInlinedClusters(t *testing.T) {
+	for name, parse := range map[string]func() *osmparser.ParseResult{
+		"cul-de-sac":      culDeSacParse,
+		"slow multi-gate": slowEstateParse,
+		"all public":      func() *osmparser.ParseResult { p := culDeSacParse(); p.Edges = p.Edges[:4]; return p },
+	} {
+		g := FilterBridgingRestricted(Build(parse()))
+		if got := penaltiesByLon(t, g); len(got) != 0 {
+			t.Errorf("%s: penalties = %v, want none (nothing is penalized)", name, got)
+		}
 	}
 }

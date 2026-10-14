@@ -154,6 +154,10 @@ func WriteBinary(path string, chg *CHGraph) error {
 	if err := binary.Write(f, binary.LittleEndian, checksum); err != nil {
 		return fmt.Errorf("write CRC32: %w", err)
 	}
+	// Optional chunks go after the trailer, where older readers never look.
+	if err := writeChunks(f, graphChunks(chg)); err != nil {
+		return err
+	}
 
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("close temp file: %w", err)
@@ -263,6 +267,9 @@ func ReadBinary(path string) (*CHGraph, error) {
 	}
 	if storedCRC != expectedCRC {
 		return nil, fmt.Errorf("CRC32 mismatch: stored=%08x computed=%08x", storedCRC, expectedCRC)
+	}
+	if err := readChunks(f, result); err != nil {
+		return nil, err
 	}
 
 	// Validate CSR invariants.

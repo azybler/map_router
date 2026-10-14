@@ -233,19 +233,29 @@ func FilterToComponent(g *Graph, nodes []uint32) *Graph {
 
 	numNodes := uint32(len(nodes))
 
-	// Collect edges that are fully within the component.
+	// Collect edges that are fully within the component. They are collected in
+	// ascending new source order, which is exactly their new CSR order, so an
+	// edge's new index is its position in edges.
 	type edge struct {
 		from, to, weight uint32
 		shapeLats        []float64
 		shapeLons        []float64
 	}
 	var edges []edge
+	var penalties *EdgePenalties
+	if g.Penalties != nil {
+		penalties = &EdgePenalties{}
+	}
 
 	for _, oldU := range nodes {
 		start, end := g.EdgesFrom(oldU)
 		for e := start; e < end; e++ {
 			oldV := g.Head[e]
 			if newV, ok := oldToNew[oldV]; ok {
+				if w, ok := g.Penalties.lookup(e); ok {
+					penalties.Edges = append(penalties.Edges, uint32(len(edges)))
+					penalties.Unpenalized = append(penalties.Unpenalized, w)
+				}
 				var shapeLats, shapeLons []float64
 				if g.GeoFirstOut != nil {
 					geoStart := g.GeoFirstOut[e]
@@ -318,5 +328,6 @@ func FilterToComponent(g *Graph, nodes []uint32) *Graph {
 		GeoFirstOut: geoFirstOut,
 		GeoShapeLat: geoShapeLat,
 		GeoShapeLon: geoShapeLon,
+		Penalties:   penalties,
 	}
 }

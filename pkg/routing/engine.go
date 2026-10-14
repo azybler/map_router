@@ -64,8 +64,17 @@ type Segment struct {
 // RouteResult is the output of a route query.
 type RouteResult struct {
 	TotalDistanceMeters float64
-	DurationSeconds     float64 // internal: mu/1000; may include access-penalty time; NOT exposed via API in Phase 1
-	Segments            []Segment
+	// DurationSeconds is the travel time along the route: the unpenalized
+	// weights of the edges travelled, partial first and last edges included,
+	// / 1000. It leaves out what only steers the search: restricted-road
+	// penalties and Route's access penalty. A time on a time-weighted graph (ms
+	// weights), not on a distance-weighted one. Not exposed via the HTTP API.
+	DurationSeconds float64
+	// Cost is the total the search minimized, in the graph's weight units, with
+	// every penalty in it. Compare alternative routes by Cost so the choice
+	// matches the router's own; report DurationSeconds.
+	Cost     uint32
+	Segments []Segment
 }
 
 // Router is the interface for route queries.
@@ -180,10 +189,12 @@ func (e *Engine) Route(ctx context.Context, start, end LatLng) (*RouteResult, er
 		}
 	}
 	totalDistMeters := polylineLengthMeters(geometry)
+	pen := func(s SnapResult) uint32 { return accessPenalty(e.origGraph, s) }
 
 	return &RouteResult{
 		TotalDistanceMeters: totalDistMeters,
-		DurationSeconds:     float64(mu) / 1000.0,
+		DurationSeconds:     float64(e.travelWeight(origNodes, startCands, endCands, pen)) / 1000.0,
+		Cost:                mu,
 		Segments: []Segment{
 			{
 				DistanceMeters: totalDistMeters,
@@ -259,10 +270,12 @@ func (e *Engine) RouteBetweenSnaps(ctx context.Context, start, end SnapResult) (
 		geometry = append(geometry, LatLng{Lat: eLat, Lng: eLng})
 	}
 	totalDistMeters := polylineLengthMeters(geometry)
+	noPen := func(SnapResult) uint32 { return 0 }
 
 	return &RouteResult{
 		TotalDistanceMeters: totalDistMeters,
-		DurationSeconds:     float64(mu) / 1000.0,
+		DurationSeconds:     float64(e.travelWeight(origNodes, []SnapResult{start}, []SnapResult{end}, noPen)) / 1000.0,
+		Cost:                mu,
 		Segments: []Segment{
 			{
 				DistanceMeters: totalDistMeters,
@@ -306,11 +319,14 @@ func (e *Engine) routeAlongEdge(start, end SnapResult, endRatio float64) (*Route
 	eLat, eLng := snapLatLng(g, end)
 	geometry := []LatLng{{Lat: sLat, Lng: sLng}, {Lat: eLat, Lng: eLng}}
 	totalDistMeters := polylineLengthMeters(geometry)
-	mu := uint32(math.Round(float64(g.Weight[start.EdgeIdx]) * math.Abs(endRatio-start.Ratio)))
+	frac := math.Abs(endRatio - start.Ratio)
+	mu := uint32(math.Round(float64(g.Weight[start.EdgeIdx]) * frac))
+	travel := math.Round(float64(e.unpenalizedWeight(start.EdgeIdx)) * frac)
 
 	return &RouteResult{
 		TotalDistanceMeters: totalDistMeters,
-		DurationSeconds:     float64(mu) / 1000.0,
+		DurationSeconds:     travel / 1000.0,
+		Cost:                mu,
 		Segments: []Segment{
 			{
 				DistanceMeters: totalDistMeters,
@@ -318,6 +334,91 @@ func (e *Engine) routeAlongEdge(start, end SnapResult, endRatio float64) (*Route
 			},
 		},
 	}, true
+}
+
+// unpenalizedWeight returns an original edge's weight without its
+// restricted-road penalty (see graph.EdgePenalties).
+func (e *Engine) unpenalizedWeight(edge uint32) uint32 {
+	return e.chg.Penalties.UnpenalizedWeight(edge, e.origGraph.Weight[edge])
+}
+
+// travelWeight returns the unpenalized weight of driving a route: every edge of
+// the unpacked path, plus the partial edges joining it to the start and end
+// snaps. Restricted-road penalties keep routes out of gated estates and access
+// penalties choose between nearby roads; neither is time spent driving, so
+// neither is in it. A path through a penalized estate would otherwise report up
+// to the penalty factor (50×) its real time.
+//
+// pen must price access exactly as seeding did, so each end resolves to the
+// candidate whose seed the search actually used.
+func (e *Engine) travelWeight(path []uint32, startCands, endCands []SnapResult, pen func(SnapResult) uint32) uint64 {
+	if len(path) == 0 {
+		return 0
+	}
+	total := uint64(e.seedTravel(startCands, path[0], true, pen)) +
+		uint64(e.seedTravel(endCands, path[len(path)-1], false, pen))
+	for i := 0; i+1 < len(path); i++ {
+		if edge := cheapestEdge(e.origGraph, path[i], path[i+1]); edge != noNode {
+			total += uint64(e.unpenalizedWeight(edge))
+		}
+	}
+	return total
+}
+
+// seedTravel returns the unpenalized weight of the partial edge between a snap
+// and node, for the candidate that seeded node most cheaply: forward from its
+// snap to node, or backward from node to its snap. It repeats the arithmetic of
+// seedForwardPenalty/seedBackwardPenalty, first-wins tie-break included, so it
+// picks the seed the search used.
+func (e *Engine) seedTravel(cands []SnapResult, node uint32, forward bool, pen func(SnapResult) uint32) uint32 {
+	g := e.origGraph
+	var best, travel uint32
+	found := false
+	for _, c := range cands {
+		frac, ok := seedFraction(g, c, node, forward)
+		if !ok {
+			continue
+		}
+		cost := uint32(math.Round(float64(g.Weight[c.EdgeIdx])*frac)) + pen(c)
+		if !found || cost < best {
+			best, found = cost, true
+			travel = uint32(math.Round(float64(e.unpenalizedWeight(c.EdgeIdx)) * frac))
+		}
+	}
+	return travel
+}
+
+// seedFraction returns the fraction of snap c's edge travelled between its snap
+// point and node — leaving the snap for node when forward, arriving at the snap
+// from node when not — and ok=false if c does not seed node that way.
+func seedFraction(g *graph.Graph, c SnapResult, node uint32, forward bool) (float64, bool) {
+	// Along u→v the snap reaches v (forward) or is reached from u (backward);
+	// reaching the other end means travelling against u→v.
+	along, against := c.NodeV, c.NodeU
+	alongFrac, againstFrac := 1-c.Ratio, c.Ratio
+	if !forward {
+		along, against = c.NodeU, c.NodeV
+		alongFrac, againstFrac = c.Ratio, 1-c.Ratio
+	}
+	switch {
+	case node == along:
+		return alongFrac, true
+	case node == against && findEdge(g.FirstOut, g.Head, c.NodeV, c.NodeU) != noNode:
+		return againstFrac, true
+	}
+	return 0, false
+}
+
+// cheapestEdge returns the lowest-weight edge u→v — the one a shortest path
+// takes where parallel edges join the same pair — or noNode if there is none.
+func cheapestEdge(g *graph.Graph, u, v uint32) uint32 {
+	best := noNode
+	for i := g.FirstOut[u]; i < g.FirstOut[u+1]; i++ {
+		if g.Head[i] == v && (best == noNode || g.Weight[i] < g.Weight[best]) {
+			best = i
+		}
+	}
+	return best
 }
 
 // reconstructOverlayPath builds the full overlay node path from

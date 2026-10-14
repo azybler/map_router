@@ -330,6 +330,7 @@ func buildOverlay(orig *graph.Graph, outAdj, inAdj [][]adjEntry, rank []uint32) 
 		GeoFirstOut:  orig.GeoFirstOut,
 		GeoShapeLat:  orig.GeoShapeLat,
 		GeoShapeLon:  orig.GeoShapeLon,
+		Penalties:    orig.Penalties,
 	}
 }
 
