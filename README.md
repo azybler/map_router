@@ -56,6 +56,7 @@ Flags:
 - `--bbox lat_min,lng_min,lat_max,lng_max` — custom bounding box
 - `--distance` — weight edges by physical road length (shortest-**distance** routing) instead of travel time; ignores `--speeds`
 - `--min-component N` — keep every strongly-connected road network with ≥ `N` nodes (`0` = largest only, default). Use a small value like `2` to retain disconnected networks such as islands (e.g. Tasmania)
+- `--close-core yes|no|auto` — give the uncontracted CH core exact all-pairs shortcuts. Without it the query can miss the fastest route when it crosses the core (~5% of KL routes, up to ~20% slower). `auto` (default) closes it for the time metric only, which keeps `--distance` graphs byte-identical to earlier builds
 
 The routing engine is metric-agnostic: it minimizes the sum of edge weights, so `--distance` yields shortest-distance routes with no changes to the server or query code. Reported distances always come from the path geometry, independent of the metric.
 
