@@ -1,14 +1,14 @@
 {
   "class_kmh": {
-    "motorway": 90,
-    "trunk": 74,
-    "primary": 48,
-    "secondary": 33,
-    "tertiary": 27,
-    "unclassified": 28,
-    "residential": 19,
+    "motorway": 80,
+    "trunk": 68,
+    "primary": 52,
+    "secondary": 39,
+    "tertiary": 32,
+    "unclassified": 31,
+    "residential": 21,
     "living_street": 6,
-    "service": 10
+    "service": 8
   },
   "zone_kmh": {
     "MY:urban": 60,
@@ -22,5 +22,12 @@
   },
   "link_factor": 0.45,
   "maxspeed_factor": 0.9,
-  "fallback": 30
+  "fallback": 30,
+  "delay_s": {
+    "junction_major": 0,
+    "junction_equal": 4,
+    "junction_minor": 12,
+    "traffic_signal": 2,
+    "toll_booth": 15
+  }
 }
