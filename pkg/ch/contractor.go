@@ -10,6 +10,24 @@ import (
 // Nodes exceeding this form an uncontracted "core" at the top of the hierarchy.
 const maxShortcutsPerNode = 1000
 
+// Options tunes Contract.
+type Options struct {
+	// MaxShortcutsPerNode stops contraction, leaving the remaining nodes as an
+	// uncontracted core, when the next node would need more shortcuts than
+	// this. 0 means maxShortcutsPerNode.
+	MaxShortcutsPerNode int
+
+	// CloseCore gives every ordered pair of core nodes a shortcut carrying
+	// their exact distance. Without it the core is ranked by node index and
+	// left as is, and the upward-only query cannot follow a core path whose
+	// ranks dip (rank[c2] < rank[c1] and rank[c2] < rank[c3] on c1→c2→c3), so
+	// it returns a slower route whenever the best one crosses the core that
+	// way: ~5% of KL queries, up to ~20% over the optimum. With every core pair
+	// one edge apart, any core section of a path is a single upward or
+	// downward edge, which the query does follow.
+	CloseCore bool
+}
+
 // adjEntry represents an edge in the mutable adjacency list.
 type adjEntry struct {
 	to     uint32
@@ -17,11 +35,21 @@ type adjEntry struct {
 	middle int32 // -1 for original edges, else the contracted node ID
 }
 
-// Contract performs Contraction Hierarchies preprocessing on the given graph.
+// Contract performs Contraction Hierarchies preprocessing on the given graph
+// with the default Options.
 func Contract(g *graph.Graph) *graph.CHGraph {
+	return ContractWith(g, Options{})
+}
+
+// ContractWith performs Contraction Hierarchies preprocessing on the given graph.
+func ContractWith(g *graph.Graph, opt Options) *graph.CHGraph {
 	n := g.NumNodes
 	if n == 0 {
 		return &graph.CHGraph{}
+	}
+	maxShortcuts := opt.MaxShortcutsPerNode
+	if maxShortcuts <= 0 {
+		maxShortcuts = maxShortcutsPerNode
 	}
 
 	// Build mutable forward and reverse adjacency lists from the CSR graph.
@@ -82,9 +110,9 @@ func Contract(g *graph.Graph) *graph.CHGraph {
 		// If contracting this node would produce too many shortcuts,
 		// stop contraction entirely. Remaining nodes form a "core"
 		// at the top of the hierarchy with original edges preserved.
-		if len(shortcuts) > maxShortcutsPerNode {
+		if len(shortcuts) > maxShortcuts {
 			log.Printf("Stopping contraction: node %d would create %d shortcuts (limit %d). %d nodes remain in core.",
-				node, len(shortcuts), maxShortcutsPerNode, n-order)
+				node, len(shortcuts), maxShortcuts, n-order)
 			break
 		}
 
@@ -132,6 +160,14 @@ func Contract(g *graph.Graph) *graph.CHGraph {
 
 		if order%logInterval == 0 {
 			log.Printf("Contracted %d/%d nodes, %d shortcuts so far", order, n, totalShortcuts)
+		}
+	}
+
+	if opt.CloseCore {
+		closed := closeCore(outAdj, inAdj, contracted)
+		totalShortcuts += closed
+		if closed > 0 {
+			log.Printf("Closed the core with %d exact shortcuts", closed)
 		}
 	}
 
@@ -222,6 +258,94 @@ func findShortcuts(ws *witnessState, outAdj, inAdj [][]adjEntry, node uint32, co
 	}
 
 	return ws.shortcuts
+}
+
+// closeCore adds a shortcut a→b for every ordered pair of uncontracted (core)
+// nodes that the core connects, weighing their exact distance, unless an edge
+// a→b already weighs that little. Returns the number of shortcuts added.
+//
+// Core distances are exact graph distances: contracting each earlier node left
+// a witness or a shortcut for every pair of its remaining neighbours. A
+// shortcut's middle is the core node halfway along the path it replaces, so
+// both halves are themselves core edges or core shortcuts and unpacking
+// recurses only log2(hops) deep.
+func closeCore(outAdj, inAdj [][]adjEntry, contracted []bool) int {
+	var core []uint32
+	for i, c := range contracted {
+		if !c {
+			core = append(core, uint32(i))
+		}
+	}
+	k := len(core)
+	if k < 3 {
+		return 0
+	}
+	idx := make(map[uint32]int, k)
+	for i, v := range core {
+		idx[v] = i
+	}
+
+	const inf = ^uint64(0)
+	// direct[i*k+j] is the lightest edge core[i]→core[j].
+	direct := make([]uint64, k*k)
+	for i := range direct {
+		direct[i] = inf
+	}
+	for i, u := range core {
+		for _, e := range outAdj[u] {
+			if j, ok := idx[e.to]; ok && j != i && uint64(e.weight) < direct[i*k+j] {
+				direct[i*k+j] = uint64(e.weight)
+			}
+		}
+	}
+
+	added := 0
+	dist := make([]uint64, k)
+	pred := make([]int, k)
+	done := make([]bool, k)
+	var path []int
+	for s := 0; s < k; s++ {
+		// Dense Dijkstra: the core is small and nearly complete.
+		for j := range dist {
+			dist[j], pred[j], done[j] = inf, -1, false
+		}
+		dist[s] = 0
+		for {
+			u := -1
+			for j := 0; j < k; j++ {
+				if !done[j] && dist[j] != inf && (u < 0 || dist[j] < dist[u]) {
+					u = j
+				}
+			}
+			if u < 0 {
+				break
+			}
+			done[u] = true
+			row := direct[u*k : u*k+k]
+			for j, w := range row {
+				if w != inf && !done[j] && dist[u]+w < dist[j] {
+					dist[j], pred[j] = dist[u]+w, u
+				}
+			}
+		}
+		for t := 0; t < k; t++ {
+			if t == s || dist[t] == inf || direct[s*k+t] <= dist[t] || dist[t] > uint64(maxUint32) {
+				continue
+			}
+			// The path has at least two hops (the direct edge, if any, is
+			// heavier), so it has an inner node to split it at.
+			path = path[:0]
+			for x := pred[t]; x != s; x = pred[x] {
+				path = append(path, x)
+			}
+			mid := core[path[len(path)/2]]
+			from, to, w := core[s], core[t], uint32(dist[t])
+			outAdj[from] = append(outAdj[from], adjEntry{to: to, weight: w, middle: int32(mid)})
+			inAdj[to] = append(inAdj[to], adjEntry{to: from, weight: w, middle: int32(mid)})
+			added++
+		}
+	}
+	return added
 }
 
 // computePriority returns the priority for a node (lower = contract first).

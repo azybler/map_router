@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"time"
 
@@ -26,6 +27,7 @@ func main() {
 	speeds := flag.String("speeds", "", "Path to a JSON speed table (default: built-in Malaysian priors)")
 	distance := flag.Bool("distance", false, "Weight edges by physical road length (shortest-distance routing) instead of travel time; ignores --speeds")
 	minComponent := flag.Int("min-component", 0, "Keep every strongly-connected road network with >= N nodes (0: keep only the largest, default). Use a small value like 2 to retain disconnected networks such as islands, e.g. Tasmania for all-of-Australia coverage")
+	closeCore := flag.String("close-core", "auto", "Give the uncontracted CH core exact all-pairs shortcuts so queries through it find the optimum: yes, no, or auto (yes for the time metric, no for --distance, whose routes are kept as they were)")
 	flag.Parse()
 
 	// --output-base and --output-overlay are a pair: either both name the two
@@ -110,6 +112,21 @@ func main() {
 	g := graph.Build(parseResult)
 	log.Printf("Graph: %d nodes, %d edges", g.NumNodes, g.NumEdges)
 
+	// Time lost at junctions, signals and toll booths is travel time: add it
+	// to the time metric's weights (before the private-road filter, which
+	// drops the way/class/node data it needs).
+	if !opts.Distance {
+		ds := opts.Speeds.DelayS
+		ms := func(s float64) uint32 { return uint32(math.Round(s * 1000)) }
+		d := graph.NodeDelays{JunctionMajor: ms(ds.JunctionMajor), JunctionEqual: ms(ds.JunctionEqual),
+			JunctionMinor: ms(ds.JunctionMinor), Signal: ms(ds.Signal), TollBooth: ms(ds.TollBooth)}
+		if d != (graph.NodeDelays{}) {
+			n := graph.AddNodeDelays(g, d)
+			log.Printf("Node delays (junction %g/%g/%gs major/equal/minor, signal %gs, toll booth %gs) added to %d edges",
+				ds.JunctionMajor, ds.JunctionEqual, ds.JunctionMinor, ds.Signal, ds.TollBooth, n)
+		}
+	}
+
 	// Keep private/gated roads (access=private/permit/residents) so gated
 	// delivery endpoints are reachable, penalizing the clusters that would
 	// otherwise be through-shortcuts; their unpenalized weights are recorded so
@@ -136,8 +153,18 @@ func main() {
 	log.Printf("Filtered graph: %d nodes, %d edges (%d penalized)", g.NumNodes, g.NumEdges, penalizedEdges(g.Penalties))
 
 	// Step 4: Contract CH.
-	log.Println("Running Contraction Hierarchies...")
-	chResult := ch.Contract(g)
+	var chOpt ch.Options
+	switch *closeCore {
+	case "yes":
+		chOpt.CloseCore = true
+	case "no":
+	case "auto":
+		chOpt.CloseCore = !*distance
+	default:
+		log.Fatalf("--close-core must be yes, no or auto, not %q", *closeCore)
+	}
+	log.Printf("Running Contraction Hierarchies (close core: %v)...", chOpt.CloseCore)
+	chResult := ch.ContractWith(g, chOpt)
 	log.Printf("CH complete: %d fwd edges, %d bwd edges", len(chResult.FwdHead), len(chResult.BwdHead))
 
 	// Step 5: Serialize to binary — either one combined file or a split

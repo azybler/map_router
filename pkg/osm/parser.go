@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"math"
+	"strings"
 
 	"github.com/paulmach/osm"
 	"github.com/paulmach/osm/osmpbf"
@@ -20,6 +21,32 @@ type RawEdge struct {
 	ShapeLats  []float64 // intermediate shape node latitudes (excluding from/to)
 	ShapeLons  []float64 // intermediate shape node longitudes (excluding from/to)
 	Restricted bool      // gated/private (access=private/permit/residents); last-mile only
+	Way        osm.WayID // the OSM way the edge belongs to
+	Class      uint8     // ClassRank of the way's highway tag
+	ToSignal   bool      // ToNodeID is tagged highway=traffic_signals
+	ToToll     bool      // ToNodeID is tagged barrier=toll_booth
+}
+
+// ClassRank orders car highway classes from motorway (7) down to service and
+// living_street (0); a link ranks with its parent class.
+func ClassRank(highway string) uint8 {
+	switch strings.TrimSuffix(highway, "_link") {
+	case "motorway":
+		return 7
+	case "trunk":
+		return 6
+	case "primary":
+		return 5
+	case "secondary":
+		return 4
+	case "tertiary":
+		return 3
+	case "unclassified":
+		return 2
+	case "residential":
+		return 1
+	}
+	return 0
 }
 
 // computeWeightMs converts a segment length (m) and speed (km/h) to travel time
@@ -199,11 +226,13 @@ func directionFlags(tags osm.Tags) (forward, backward bool) {
 
 // wayInfo holds parsed way data collected during Pass 1.
 type wayInfo struct {
+	ID         osm.WayID
 	NodeIDs    []osm.NodeID
 	Forward    bool
 	Backward   bool
 	SpeedKmh   float64
 	Restricted bool
+	Class      uint8
 }
 
 // BBox defines a geographic bounding box for filtering.
@@ -279,11 +308,13 @@ func Parse(ctx context.Context, rs io.ReadSeeker, opts ...ParseOptions) (*ParseR
 		}
 
 		ways = append(ways, wayInfo{
+			ID:         w.ID,
 			NodeIDs:    nodeIDs,
 			Forward:    fwd,
 			Backward:   bwd,
 			SpeedKmh:   opt.Speeds.SpeedKmh(w.Tags),
 			Restricted: restricted,
+			Class:      ClassRank(w.Tags.Find("highway")),
 		})
 	}
 	if err := scanner.Err(); err != nil {
@@ -302,6 +333,8 @@ func Parse(ctx context.Context, rs io.ReadSeeker, opts ...ParseOptions) (*ParseR
 	nodeLat := make(map[osm.NodeID]float64, len(referencedNodes))
 	nodeLon := make(map[osm.NodeID]float64, len(referencedNodes))
 	barrierNodes := make(map[osm.NodeID]struct{})
+	signalNodes := make(map[osm.NodeID]struct{})
+	tollNodes := make(map[osm.NodeID]struct{})
 
 	scanner = osmpbf.New(ctx, rs, 1)
 	scanner.SkipWays = true
@@ -323,6 +356,12 @@ func Parse(ctx context.Context, rs io.ReadSeeker, opts ...ParseOptions) (*ParseR
 		if nodeBarrierRestricts(n.Tags) {
 			barrierNodes[n.ID] = struct{}{}
 		}
+		if n.Tags.Find("highway") == "traffic_signals" {
+			signalNodes[n.ID] = struct{}{}
+		}
+		if n.Tags.Find("barrier") == "toll_booth" {
+			tollNodes[n.ID] = struct{}{}
+		}
 	}
 	if err := scanner.Err(); err != nil {
 		scanner.Close()
@@ -330,7 +369,8 @@ func Parse(ctx context.Context, rs io.ReadSeeker, opts ...ParseOptions) (*ParseR
 	}
 	scanner.Close()
 
-	log.Printf("Pass 2 complete: %d node coordinates collected, %d restrictive barrier nodes", len(nodeLat), len(barrierNodes))
+	log.Printf("Pass 2 complete: %d node coordinates collected, %d restrictive barrier nodes, %d traffic signals, %d toll booths",
+		len(nodeLat), len(barrierNodes), len(signalNodes), len(tollNodes))
 
 	// Build edges from ways.
 	var edges []RawEdge
@@ -378,12 +418,20 @@ func Parse(ctx context.Context, rs io.ReadSeeker, opts ...ParseOptions) (*ParseR
 				}
 			}
 
+			_, fromSignal := signalNodes[fromID]
+			_, toSignal := signalNodes[toID]
+			_, fromToll := tollNodes[fromID]
+			_, toToll := tollNodes[toID]
 			if w.Forward {
 				edges = append(edges, RawEdge{
 					FromNodeID: fromID,
 					ToNodeID:   toID,
 					Weight:     weight,
 					Restricted: restricted,
+					Way:        w.ID,
+					Class:      w.Class,
+					ToSignal:   toSignal,
+					ToToll:     toToll,
 				})
 			}
 			if w.Backward {
@@ -392,6 +440,10 @@ func Parse(ctx context.Context, rs io.ReadSeeker, opts ...ParseOptions) (*ParseR
 					ToNodeID:   fromID,
 					Weight:     weight,
 					Restricted: restricted,
+					Way:        w.ID,
+					Class:      w.Class,
+					ToSignal:   fromSignal,
+					ToToll:     fromToll,
 				})
 			}
 		}
