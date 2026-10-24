@@ -111,3 +111,32 @@ func TestFloorAndCapClassKmh(t *testing.T) {
 		t.Errorf("residential = %v, want default", v)
 	}
 }
+
+func TestParseSpeedTableDelays(t *testing.T) {
+	tbl, err := ParseSpeedTable([]byte(`{"delay_s": {"junction_major": 0.5, "junction_equal": 3, "junction_minor": 10, "traffic_signal": 2, "toll_booth": 15}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := DelayS{JunctionMajor: 0.5, JunctionEqual: 3, JunctionMinor: 10, Signal: 2, TollBooth: 15}
+	if tbl.DelayS != want {
+		t.Errorf("DelayS = %+v, want %+v", tbl.DelayS, want)
+	}
+	none, err := ParseSpeedTable([]byte(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if none.DelayS != (DelayS{}) {
+		t.Errorf("omitted delay_s should add no delays, got %+v", none.DelayS)
+	}
+}
+
+func TestClassRank(t *testing.T) {
+	for hw, want := range map[string]uint8{
+		"motorway": 7, "motorway_link": 7, "trunk": 6, "primary_link": 5, "secondary": 4,
+		"tertiary": 3, "unclassified": 2, "residential": 1, "service": 0, "living_street": 0,
+	} {
+		if got := ClassRank(hw); got != want {
+			t.Errorf("ClassRank(%q) = %d, want %d", hw, got, want)
+		}
+	}
+}

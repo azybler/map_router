@@ -43,6 +43,10 @@ func Build(result *osmparser.ParseResult) *Graph {
 		to         uint32
 		weight     uint32
 		restricted bool
+		way        osm.WayID
+		class      uint8
+		toSignal   bool
+		toToll     bool
 		shapeLats  []float64
 		shapeLons  []float64
 	}
@@ -54,6 +58,10 @@ func Build(result *osmparser.ParseResult) *Graph {
 			to:         nodeSet[e.ToNodeID],
 			weight:     e.Weight,
 			restricted: e.Restricted,
+			way:        e.Way,
+			class:      e.Class,
+			toSignal:   e.ToSignal,
+			toToll:     e.ToToll,
 			shapeLats:  e.ShapeLats,
 			shapeLons:  e.ShapeLons,
 		}
@@ -73,6 +81,10 @@ func Build(result *osmparser.ParseResult) *Graph {
 	head := make([]uint32, numEdges)
 	weight := make([]uint32, numEdges)
 	edgeRestricted := make([]bool, numEdges)
+	edgeWay := make([]osm.WayID, numEdges)
+	edgeClass := make([]uint8, numEdges)
+	edgeToSignal := make([]bool, numEdges)
+	edgeToToll := make([]bool, numEdges)
 
 	// Geometry arrays.
 	geoFirstOut := make([]uint32, numEdges+1)
@@ -82,6 +94,10 @@ func Build(result *osmparser.ParseResult) *Graph {
 		head[i] = e.to
 		weight[i] = e.weight
 		edgeRestricted[i] = e.restricted
+		edgeWay[i] = e.way
+		edgeClass[i] = e.class
+		edgeToSignal[i] = e.toSignal
+		edgeToToll[i] = e.toToll
 		geoFirstOut[i] = uint32(len(geoShapeLat))
 		geoShapeLat = append(geoShapeLat, e.shapeLats...)
 		geoShapeLon = append(geoShapeLon, e.shapeLons...)
@@ -112,6 +128,10 @@ func Build(result *osmparser.ParseResult) *Graph {
 		Head:           head,
 		Weight:         weight,
 		EdgeRestricted: edgeRestricted,
+		EdgeWay:        edgeWay,
+		EdgeClass:      edgeClass,
+		EdgeToSignal:   edgeToSignal,
+		EdgeToToll:     edgeToToll,
 		NodeLat:        nodeLat,
 		NodeLon:        nodeLon,
 		GeoFirstOut:    geoFirstOut,

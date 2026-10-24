@@ -29,6 +29,19 @@ type SpeedTable struct {
 	MaxspeedFactor float64
 	FloorClassKmh  map[string]float64
 	CapClassKmh    map[string]float64
+	// DelayS is the time lost passing through junctions, traffic signals and
+	// toll booths; preprocess adds it to time-metric edge weights
+	// (graph.AddNodeDelays). The zero value adds nothing.
+	DelayS DelayS
+}
+
+// DelayS is graph.NodeDelays in seconds, as speeds.json gives it.
+type DelayS struct {
+	JunctionMajor float64 `json:"junction_major"` // the arriving road outranks every other road there
+	JunctionEqual float64 `json:"junction_equal"` // the biggest other road there ranks the same
+	JunctionMinor float64 `json:"junction_minor"` // a bigger road crosses or joins it
+	Signal        float64 `json:"traffic_signal"` // entering a node tagged highway=traffic_signals
+	TollBooth     float64 `json:"toll_booth"`     // entering a node tagged barrier=toll_booth
 }
 
 // DefaultSpeedTable returns the Malaysian-urban free-flow priors.
@@ -64,6 +77,7 @@ func ParseSpeedTable(data []byte) (SpeedTable, error) {
 		MaxspeedFactor float64            `json:"maxspeed_factor"`
 		FloorClassKmh  map[string]float64 `json:"floor_class_kmh"`
 		CapClassKmh    map[string]float64 `json:"cap_class_kmh"`
+		DelayS         *DelayS            `json:"delay_s"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return SpeedTable{}, err
@@ -88,6 +102,9 @@ func ParseSpeedTable(data []byte) (SpeedTable, error) {
 	}
 	if raw.CapClassKmh != nil {
 		def.CapClassKmh = raw.CapClassKmh
+	}
+	if raw.DelayS != nil {
+		def.DelayS = *raw.DelayS
 	}
 	return def, nil
 }

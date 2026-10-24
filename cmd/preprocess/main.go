@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"time"
 
@@ -110,6 +111,21 @@ func main() {
 	log.Println("Building graph...")
 	g := graph.Build(parseResult)
 	log.Printf("Graph: %d nodes, %d edges", g.NumNodes, g.NumEdges)
+
+	// Time lost at junctions, signals and toll booths is travel time: add it
+	// to the time metric's weights (before the private-road filter, which
+	// drops the way/class/node data it needs).
+	if !opts.Distance {
+		ds := opts.Speeds.DelayS
+		ms := func(s float64) uint32 { return uint32(math.Round(s * 1000)) }
+		d := graph.NodeDelays{JunctionMajor: ms(ds.JunctionMajor), JunctionEqual: ms(ds.JunctionEqual),
+			JunctionMinor: ms(ds.JunctionMinor), Signal: ms(ds.Signal), TollBooth: ms(ds.TollBooth)}
+		if d != (graph.NodeDelays{}) {
+			n := graph.AddNodeDelays(g, d)
+			log.Printf("Node delays (junction %g/%g/%gs major/equal/minor, signal %gs, toll booth %gs) added to %d edges",
+				ds.JunctionMajor, ds.JunctionEqual, ds.JunctionMinor, ds.Signal, ds.TollBooth, n)
+		}
+	}
 
 	// Keep private/gated roads (access=private/permit/residents) so gated
 	// delivery endpoints are reachable, penalizing the clusters that would

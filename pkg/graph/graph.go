@@ -1,6 +1,10 @@
 package graph
 
-import "slices"
+import (
+	"slices"
+
+	"github.com/paulmach/osm"
+)
 
 // CHGraph holds the output of contraction hierarchies preprocessing.
 type CHGraph struct {
@@ -131,6 +135,15 @@ type Graph struct {
 	// consumed by FilterBridgingRestricted at preprocess time; NOT serialized
 	// (nil after a binary load — the server treats all edges as normal).
 	EdgeRestricted []bool // len: NumEdges (build-time only)
+
+	// EdgeWay[i] and EdgeClass[i] are edge i's OSM way and osm.ClassRank;
+	// EdgeToSignal[i] and EdgeToToll[i] say whether its head node is a traffic
+	// signal or a toll booth. Populated by Build for AddNodeDelays at
+	// preprocess time; NOT serialized, and dropped by FilterBridgingRestricted.
+	EdgeWay      []osm.WayID // len: NumEdges (build-time only)
+	EdgeClass    []uint8     // len: NumEdges (build-time only)
+	EdgeToSignal []bool      // len: NumEdges (build-time only)
+	EdgeToToll   []bool      // len: NumEdges (build-time only)
 
 	// Penalties records the edges FilterBridgingRestricted penalized (build-time;
 	// ch.Contract carries it into the CHGraph). nil if the filter has not run.

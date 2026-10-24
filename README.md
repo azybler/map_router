@@ -54,11 +54,30 @@ Flags:
 - `--kl` — filter to Kuala Lumpur bounding box
 - `--wmy` — filter to West (Peninsular) Malaysia bounding box (1.25,99.6 → 6.75,104.35)
 - `--bbox lat_min,lng_min,lat_max,lng_max` — custom bounding box
+- `--speeds` — JSON travel-time model for the time metric (see [Time model](#time-model)); built-in Malaysian priors when omitted
 - `--distance` — weight edges by physical road length (shortest-**distance** routing) instead of travel time; ignores `--speeds`
 - `--min-component N` — keep every strongly-connected road network with ≥ `N` nodes (`0` = largest only, default). Use a small value like `2` to retain disconnected networks such as islands (e.g. Tasmania)
 - `--close-core yes|no|auto` — give the uncontracted CH core exact all-pairs shortcuts. Without it the query can miss the fastest route when it crosses the core (~5% of KL routes, up to ~20% slower). `auto` (default) closes it for the time metric only, which keeps `--distance` graphs byte-identical to earlier builds
 
 The routing engine is metric-agnostic: it minimizes the sum of edge weights, so `--distance` yields shortest-distance routes with no changes to the server or query code. Reported distances always come from the path geometry, independent of the metric.
+
+### Time model
+
+`speeds.json` sets each edge's travel time: a free-flow speed per highway class
+(`class_kmh`; links run at `link_factor` × their parent class), posted
+`maxspeed` tags scaled by `maxspeed_factor`, and per-class floors/caps. Its
+`delay_s` block adds the time lost at nodes, charged on entering the node:
+
+| key | charged when |
+|-----|--------------|
+| `junction_major` | entering a junction (3+ neighbours) on a road that outranks every other road there |
+| `junction_equal` | … where the biggest other road ranks the same |
+| `junction_minor` | … where a bigger road crosses or joins |
+| `traffic_signal` | entering a node tagged `highway=traffic_signals` |
+| `toll_booth` | entering a node tagged `barrier=toll_booth` |
+
+The values are calibrated against Google's routes for real delivery trips
+(`datasets/elevete_route_cache/`, gitignored).
 
 ### Australia (shortest distance, whole continent)
 
