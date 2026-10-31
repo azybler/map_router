@@ -61,6 +61,22 @@ Flags:
 
 The routing engine is metric-agnostic: it minimizes the sum of edge weights, so `--distance` yields shortest-distance routes with no changes to the server or query code. Reported distances always come from the path geometry, independent of the metric.
 
+### Road access
+
+A car-class way (`highway=motorway` … `service`, links and `living_street`)
+is kept unless its access tags close it to cars. The most specific
+transport-mode tag present decides, as OSM defines it: `motorcar`, then
+`motor_vehicle`, then `vehicle`, then `access`. So `access=no` +
+`motor_vehicle=yes` (a motor-vehicles-only flyover or link road) is open, and
+`motorcar=no` (a motorcycle lane) is closed whatever `access` says.
+
+| deciding value | the way is |
+|----------------|------------|
+| `no` | dropped |
+| `private`, `permit`, `residents` | kept as restricted: reachable for the last mile, penalized as a cut-through |
+| `destination`, `customers` | public on `access`, restricted on a mode tag |
+| anything else | public |
+
 ### Time model
 
 `speeds.json` sets each edge's travel time: a free-flow speed per highway class
