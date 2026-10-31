@@ -3,7 +3,7 @@
 # Refresh graph.time.bin in place: download the latest OSM extract and re-run
 # preprocessing, filtered to the Selangor/KL bounding box (--kl) — current
 # usage is KL/Selangor only. Speeds and node delays are Google-calibrated on
-# 1,777 routes (see datasets/elevete_route_cache/README.md); for full-peninsula coverage
+# ~9,800 routes (see datasets/elevete_route_cache/README.md); for full-peninsula coverage
 # use FILTER='--bbox 1.2,99.6,6.8,104.5' (~722 MB graph).
 #
 # Safe-by-default:

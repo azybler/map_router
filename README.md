@@ -83,8 +83,8 @@ transport-mode tag present decides, as OSM defines it: `motorcar`, then
 (`class_kmh`; links run at `link_factor` × their parent class), posted
 `maxspeed` tags scaled by `maxspeed_factor`, and per-class floors/caps.
 `ref_factor` then scales the speed of a way whose `ref` tag lists one of its
-keys. Its `delay_s` block adds the time lost at nodes, charged on entering the
-node:
+keys (`"E11": 0.95` prices the congested LDP below other motorways). Its
+`delay_s` block adds the time lost at nodes, charged on entering the node:
 
 | key | charged when |
 |-----|--------------|
@@ -95,7 +95,11 @@ node:
 | `toll_booth` | entering a node tagged `barrier=toll_booth` |
 
 The values are calibrated against Google's routes for real delivery trips
-(`datasets/elevete_route_cache/`, gitignored).
+(`datasets/elevete_route_cache/`, gitignored): last on 2026-10-31, against
+7,991 Google Maps routes for real pickup and drop-off legs plus 1,789 cached
+Routes API results. Most legs share a few corridors, so the score has cliffs:
+raising any one delay by 0.5 s flips whole corridors away from Google's
+choice. Check a change against held-out routes before trusting it.
 
 ### Australia (shortest distance, whole continent)
 
