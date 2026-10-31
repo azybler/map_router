@@ -81,8 +81,10 @@ transport-mode tag present decides, as OSM defines it: `motorcar`, then
 
 `speeds.json` sets each edge's travel time: a free-flow speed per highway class
 (`class_kmh`; links run at `link_factor` × their parent class), posted
-`maxspeed` tags scaled by `maxspeed_factor`, and per-class floors/caps. Its
-`delay_s` block adds the time lost at nodes, charged on entering the node:
+`maxspeed` tags scaled by `maxspeed_factor`, and per-class floors/caps.
+`ref_factor` then scales the speed of a way whose `ref` tag lists one of its
+keys. Its `delay_s` block adds the time lost at nodes, charged on entering the
+node:
 
 | key | charged when |
 |-----|--------------|

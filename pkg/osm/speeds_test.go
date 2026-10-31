@@ -112,6 +112,27 @@ func TestFloorAndCapClassKmh(t *testing.T) {
 	}
 }
 
+func TestRefFactor(t *testing.T) {
+	tbl, err := ParseSpeedTable([]byte(`{"class_kmh":{"motorway":80,"trunk":60},"floor_class_kmh":{"motorway":80},"ref_factor":{"E11":0.9,"FT2":1.25}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name string
+		tags osm.Tags
+		want float64
+	}{
+		{"listed ref, applied after the floor", tags("highway", "motorway", "ref", "E11", "maxspeed", "60"), 72},
+		{"one of several refs", tags("highway", "trunk", "ref", "E1; FT2"), 75},
+		{"unlisted ref", tags("highway", "motorway", "ref", "E2"), 80},
+		{"no ref", tags("highway", "trunk"), 60},
+	} {
+		if got := tbl.SpeedKmh(c.tags); math.Abs(got-c.want) > 1e-9 {
+			t.Errorf("%s: SpeedKmh = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 func TestParseSpeedTableDelays(t *testing.T) {
 	tbl, err := ParseSpeedTable([]byte(`{"delay_s": {"junction_major": 0.5, "junction_equal": 3, "junction_minor": 10, "traffic_signal": 2, "toll_booth": 15}}`))
 	if err != nil {
