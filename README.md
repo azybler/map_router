@@ -61,11 +61,29 @@ Flags:
 
 The routing engine is metric-agnostic: it minimizes the sum of edge weights, so `--distance` yields shortest-distance routes with no changes to the server or query code. Reported distances always come from the path geometry, independent of the metric.
 
+### Road access
+
+A car-class way (`highway=motorway` … `service`, links and `living_street`)
+is kept unless its access tags close it to cars. The most specific
+transport-mode tag present decides, as OSM defines it: `motorcar`, then
+`motor_vehicle`, then `vehicle`, then `access`. So `access=no` +
+`motor_vehicle=yes` (a motor-vehicles-only flyover or link road) is open, and
+`motorcar=no` (a motorcycle lane) is closed whatever `access` says.
+
+| deciding value | the way is |
+|----------------|------------|
+| `no` | dropped |
+| `private`, `permit`, `residents` | kept as restricted: reachable for the last mile, penalized as a cut-through |
+| `destination`, `customers` | public on `access`, restricted on a mode tag |
+| anything else | public |
+
 ### Time model
 
 `speeds.json` sets each edge's travel time: a free-flow speed per highway class
 (`class_kmh`; links run at `link_factor` × their parent class), posted
-`maxspeed` tags scaled by `maxspeed_factor`, and per-class floors/caps. Its
+`maxspeed` tags scaled by `maxspeed_factor`, and per-class floors/caps.
+`ref_factor` then scales the speed of a way whose `ref` tag lists one of its
+keys (`"E11": 0.95` prices the congested LDP below other motorways). Its
 `delay_s` block adds the time lost at nodes, charged on entering the node:
 
 | key | charged when |
@@ -77,7 +95,11 @@ The routing engine is metric-agnostic: it minimizes the sum of edge weights, so 
 | `toll_booth` | entering a node tagged `barrier=toll_booth` |
 
 The values are calibrated against Google's routes for real delivery trips
-(`datasets/elevete_route_cache/`, gitignored).
+(`datasets/elevete_route_cache/`, gitignored): last on 2026-10-31, against
+7,991 Google Maps routes for real pickup and drop-off legs plus 1,789 cached
+Routes API results. Most legs share a few corridors, so the score has cliffs:
+raising any one delay by 0.5 s flips whole corridors away from Google's
+choice. Check a change against held-out routes before trusting it.
 
 ### Australia (shortest distance, whole continent)
 

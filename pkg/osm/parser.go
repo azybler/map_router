@@ -104,26 +104,34 @@ var carHighways = map[string]bool{
 
 // classifyAccess decides whether a car-class way is kept, and if kept whether it
 // is "restricted" (gated/private — usable for last-mile access; the
-// restricted-cluster filter later inlines or penalizes it). access governs over
-// motor_vehicle. access=destination and access=customers stay PUBLIC: Google
-// routes through them freely in this region, and restricting them measurably
-// hurt route agreement (round-3 sweep, 2026-07).
+// restricted-cluster filter later inlines or penalizes it).
+//
+// The most specific transport-mode tag that is present decides, as OSM defines
+// it: motorcar, then motor_vehicle, then vehicle, then access. So
+// access=no + motor_vehicle=yes is a motor-vehicles-only road (the flyovers
+// and link roads that keep pedestrians and cyclists off), open to cars, and
+// motorcar=no (motorcycle lanes) is closed to them whatever access says.
+//
+// access=destination and access=customers stay PUBLIC: Google routes through
+// them freely in this region, and restricting them measurably hurt route
+// agreement (round-3 sweep, 2026-07). The same values on a mode tag restrict.
 func classifyAccess(tags osm.Tags) (keep, restricted bool) {
 	hw := tags.Find("highway")
 	if !carHighways[hw] || tags.Find("area") == "yes" {
 		return false, false
 	}
-	switch tags.Find("access") {
-	case "no":
-		return false, false
-	case "private", "permit", "residents":
-		return true, true
-	}
-	switch tags.Find("motor_vehicle") {
-	case "no":
-		return false, false
-	case "private", "destination", "customers":
-		return true, true
+	for _, key := range [...]string{"motorcar", "motor_vehicle", "vehicle", "access"} {
+		switch tags.Find(key) {
+		case "":
+			continue
+		case "no":
+			return false, false
+		case "private", "permit", "residents":
+			return true, true
+		case "destination", "customers":
+			return true, key != "access"
+		}
+		return true, false
 	}
 	return true, false
 }

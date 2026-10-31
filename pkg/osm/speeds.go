@@ -29,6 +29,11 @@ type SpeedTable struct {
 	MaxspeedFactor float64
 	FloorClassKmh  map[string]float64
 	CapClassKmh    map[string]float64
+	// RefFactor scales the resolved speed of a way whose ref tag lists one of
+	// its keys (refs are ";"-separated, e.g. "E11" for the LDP): for the roads
+	// Google prices well away from their class, such as a congested urban
+	// expressway. It applies after the floor and the cap.
+	RefFactor map[string]float64
 	// DelayS is the time lost passing through junctions, traffic signals and
 	// toll booths; preprocess adds it to time-metric edge weights
 	// (graph.AddNodeDelays). The zero value adds nothing.
@@ -77,6 +82,7 @@ func ParseSpeedTable(data []byte) (SpeedTable, error) {
 		MaxspeedFactor float64            `json:"maxspeed_factor"`
 		FloorClassKmh  map[string]float64 `json:"floor_class_kmh"`
 		CapClassKmh    map[string]float64 `json:"cap_class_kmh"`
+		RefFactor      map[string]float64 `json:"ref_factor"`
 		DelayS         *DelayS            `json:"delay_s"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -102,6 +108,9 @@ func ParseSpeedTable(data []byte) (SpeedTable, error) {
 	}
 	if raw.CapClassKmh != nil {
 		def.CapClassKmh = raw.CapClassKmh
+	}
+	if raw.RefFactor != nil {
+		def.RefFactor = raw.RefFactor
 	}
 	if raw.DelayS != nil {
 		def.DelayS = *raw.DelayS
@@ -164,6 +173,14 @@ func (s SpeedTable) SpeedKmh(t osm.Tags) float64 {
 		}
 		if v > cap {
 			v = cap
+		}
+	}
+	if len(s.RefFactor) > 0 {
+		for ref := range strings.SplitSeq(t.Find("ref"), ";") {
+			if f, ok := s.RefFactor[strings.TrimSpace(ref)]; ok {
+				v *= f
+				break
+			}
 		}
 	}
 	return v
