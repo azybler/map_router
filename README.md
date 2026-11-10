@@ -94,6 +94,15 @@ keys (`"E11": 0.95` prices the congested LDP below other motorways). Its
 | `traffic_signal` | entering a node tagged `highway=traffic_signals` |
 | `toll_booth` | entering a node tagged `barrier=toll_booth` |
 
+`way_factor_file` names a JSON object of per-road speed factors
+(`"<OSM way id>": factor`; here `way_factors.json`, resolved next to
+`speeds.json`), applied after `ref_factor`. They are learned from the routes
+Google picks: a road Google uses more than its class speed explains runs
+faster, one it avoids runs slower. Roads not in the file keep their class
+speed, and a road that OSM later re-maps under a new way id loses its factor
+until the next calibration. Inline `way_factor` entries in `speeds.json`
+override the file.
+
 The values are calibrated against Google's routes for real delivery trips
 (`datasets/elevete_route_cache/`, gitignored): last on 2026-10-31, against
 7,991 Google Maps routes for real pickup and drop-off legs plus 1,789 cached

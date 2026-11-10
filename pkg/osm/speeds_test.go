@@ -133,6 +133,62 @@ func TestRefFactor(t *testing.T) {
 	}
 }
 
+func TestWayFactor(t *testing.T) {
+	tbl, err := ParseSpeedTable([]byte(`{"class_kmh":{"primary":50},"ref_factor":{"FT2":1.2},"way_factor":{"42":1.5,"7":0.8}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name string
+		id   int64
+		tags osm.Tags
+		want float64
+	}{
+		{"listed way", 42, tags("highway", "primary"), 75},
+		{"applied after ref_factor", 7, tags("highway", "primary", "ref", "FT2"), 48},
+		{"unlisted way", 9, tags("highway", "primary"), 50},
+	} {
+		if got := tbl.WaySpeedKmh(c.id, c.tags); math.Abs(got-c.want) > 1e-9 {
+			t.Errorf("%s: WaySpeedKmh = %v, want %v", c.name, got, c.want)
+		}
+	}
+	if got := tbl.SpeedKmh(tags("highway", "primary")); got != 50 {
+		t.Errorf("SpeedKmh ignores way factors, got %v", got)
+	}
+	for _, bad := range []string{`{"way_factor":{"x1":1.1}}`, `{"way_factor":{"5":0}}`, `{"way_factor":{"5":-1}}`} {
+		if _, err := ParseSpeedTable([]byte(bad)); err == nil {
+			t.Errorf("%s: want an error", bad)
+		}
+	}
+}
+
+func TestWayFactorFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(dir+"/wf.json", []byte(`{"42": 1.5, "7": 0.8}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sp := dir + "/speeds.json"
+	if err := os.WriteFile(sp, []byte(`{"class_kmh":{"primary":50},"way_factor_file":"wf.json","way_factor":{"7":1.1}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tbl, err := LoadSpeedTable(sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := tbl.WaySpeedKmh(42, tags("highway", "primary")); math.Abs(got-75) > 1e-9 {
+		t.Errorf("way from file: %v, want 75", got)
+	}
+	if got := tbl.WaySpeedKmh(7, tags("highway", "primary")); math.Abs(got-55) > 1e-9 {
+		t.Errorf("inline way_factor should win over the file: %v, want 55", got)
+	}
+	if err := os.WriteFile(sp, []byte(`{"way_factor_file":"missing.json"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadSpeedTable(sp); err == nil {
+		t.Error("missing way_factor_file: want an error")
+	}
+}
+
 func TestParseSpeedTableDelays(t *testing.T) {
 	tbl, err := ParseSpeedTable([]byte(`{"delay_s": {"junction_major": 0.5, "junction_equal": 3, "junction_minor": 10, "traffic_signal": 2, "toll_booth": 15}}`))
 	if err != nil {

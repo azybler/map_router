@@ -85,6 +85,9 @@ func main() {
 		}
 		opts.Speeds = tbl
 		log.Printf("Using speed table from %s", *speeds)
+		if n := len(tbl.WayFactor); n > 0 {
+			log.Printf("Per-way speed factors: %d ways", n)
+		}
 	} else {
 		opts.Speeds = osmparser.DefaultSpeedTable()
 		log.Println("Using built-in default speed table")

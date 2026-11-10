@@ -2,8 +2,9 @@
 #
 # Refresh graph.time.bin in place: download the latest OSM extract and re-run
 # preprocessing, filtered to the Selangor/KL bounding box (--kl) — current
-# usage is KL/Selangor only. Speeds and node delays are Google-calibrated on
-# ~9,800 routes (see datasets/elevete_route_cache/README.md); for full-peninsula coverage
+# usage is KL/Selangor only. Speeds, node delays and per-road factors
+# (way_factors.json) are Google-calibrated on real delivery legs (see
+# datasets/elevete_route_cache/README.md); for full-peninsula coverage
 # use FILTER='--bbox 1.2,99.6,6.8,104.5' (~722 MB graph).
 #
 # Safe-by-default:
@@ -52,12 +53,18 @@ echo "    saved $PBF ($(du -h "$PBF" | cut -f1))"
 
 echo "==> Regenerating $OUTPUT (filter: $FILTER, speeds: $SPEEDS)"
 bin/map-router-preprocess --input "$PBF" --output "$OUTPUT" "$FILTER" --speeds "$SPEEDS"
-# Record the speed-table hash. Prefer sha256sum (common on Linux/CI); fall back
-# to shasum -a 256 (macOS) for portability.
+# Record the speed-table hash (and the per-way factor file it names, if any).
+# Prefer sha256sum (common on Linux/CI); fall back to shasum -a 256 (macOS).
+speed_files=("$SPEEDS")
+wf_file="$(sed -n 's/.*"way_factor_file"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SPEEDS")"
+if [[ -n "$wf_file" ]]; then
+	[[ "$wf_file" = /* ]] || wf_file="$(dirname "$SPEEDS")/$wf_file"
+	speed_files+=("$wf_file")
+fi
 if command -v sha256sum >/dev/null 2>&1; then
-	sha256sum "$SPEEDS" | tee "${OUTPUT}.speeds.sha256"
+	sha256sum "${speed_files[@]}" | tee "${OUTPUT}.speeds.sha256"
 else
-	shasum -a 256 "$SPEEDS" | tee "${OUTPUT}.speeds.sha256"
+	shasum -a 256 "${speed_files[@]}" | tee "${OUTPUT}.speeds.sha256"
 fi
 
 echo "==> Done. $OUTPUT refreshed ($(du -h "$OUTPUT" | cut -f1))."
