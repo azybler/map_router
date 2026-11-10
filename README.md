@@ -104,9 +104,12 @@ until the next calibration. Inline `way_factor` entries in `speeds.json`
 override the file.
 
 The values are calibrated against Google's routes for real delivery trips
-(`datasets/elevete_route_cache/`, gitignored): last on 2026-10-31, against
-7,991 Google Maps routes for real pickup and drop-off legs plus 1,789 cached
-Routes API results. Most legs share a few corridors, so the score has cliffs:
+(`datasets/elevete_route_cache/`, gitignored). The class speeds and delays were
+last tuned on 2026-10-31, against 7,991 Google Maps routes for real pickup and
+drop-off legs plus 1,789 cached Routes API results. The way factors were fitted
+on 2026-11-10 to 11,065 Google Maps routes, with the Routes API results held
+out: overlap with Google's path there went 0.780 → 0.832, and mean distance
+error 7.2% → 5.7%. Most legs share a few corridors, so the score has cliffs:
 raising any one delay by 0.5 s flips whole corridors away from Google's
 choice. Check a change against held-out routes before trusting it.
 
