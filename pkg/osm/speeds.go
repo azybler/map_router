@@ -2,7 +2,9 @@ package osm
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -34,6 +36,13 @@ type SpeedTable struct {
 	// Google prices well away from their class, such as a congested urban
 	// expressway. It applies after the floor and the cap.
 	RefFactor map[string]float64
+	// WayFactor scales the resolved speed of individual OSM ways (by way id),
+	// after RefFactor. It holds per-road corrections learned from the routes
+	// Google picks (datasets/elevete_route_cache, lab learn.go): a road Google
+	// favours over its class gets a factor above 1, one it avoids below 1.
+	// speeds.json can list them inline ("way_factor") or point at a separate
+	// file ("way_factor_file", relative to speeds.json; LoadSpeedTable only).
+	WayFactor map[int64]float64
 	// DelayS is the time lost passing through junctions, traffic signals and
 	// toll booths; preprocess adds it to time-metric edge weights
 	// (graph.AddNodeDelays). The zero value adds nothing.
@@ -83,6 +92,7 @@ func ParseSpeedTable(data []byte) (SpeedTable, error) {
 		FloorClassKmh  map[string]float64 `json:"floor_class_kmh"`
 		CapClassKmh    map[string]float64 `json:"cap_class_kmh"`
 		RefFactor      map[string]float64 `json:"ref_factor"`
+		WayFactor      map[string]float64 `json:"way_factor"`
 		DelayS         *DelayS            `json:"delay_s"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -115,16 +125,74 @@ func ParseSpeedTable(data []byte) (SpeedTable, error) {
 	if raw.DelayS != nil {
 		def.DelayS = *raw.DelayS
 	}
+	if len(raw.WayFactor) > 0 {
+		wf, err := parseWayFactors(raw.WayFactor)
+		if err != nil {
+			return SpeedTable{}, err
+		}
+		def.WayFactor = wf
+	}
 	return def, nil
 }
 
-// LoadSpeedTable reads a JSON speed table from path.
+// parseWayFactors converts a JSON {"<osm way id>": factor} object.
+func parseWayFactors(m map[string]float64) (map[int64]float64, error) {
+	out := make(map[int64]float64, len(m))
+	for k, f := range m {
+		id, err := strconv.ParseInt(strings.TrimSpace(k), 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("way_factor: bad way id %q", k)
+		}
+		if f <= 0 {
+			return nil, fmt.Errorf("way_factor: way %d has factor %v; must be > 0", id, f)
+		}
+		out[id] = f
+	}
+	return out, nil
+}
+
+// LoadSpeedTable reads a JSON speed table from path. A "way_factor_file" key
+// names a JSON {"<osm way id>": factor} file, resolved relative to path; its
+// entries are loaded first, so inline "way_factor" entries win on overlap.
 func LoadSpeedTable(path string) (SpeedTable, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return SpeedTable{}, err
 	}
-	return ParseSpeedTable(data)
+	t, err := ParseSpeedTable(data)
+	if err != nil {
+		return SpeedTable{}, err
+	}
+	var ref struct {
+		WayFactorFile string `json:"way_factor_file"`
+	}
+	if err := json.Unmarshal(data, &ref); err != nil {
+		return SpeedTable{}, err
+	}
+	if ref.WayFactorFile == "" {
+		return t, nil
+	}
+	fp := ref.WayFactorFile
+	if !filepath.IsAbs(fp) {
+		fp = filepath.Join(filepath.Dir(path), fp)
+	}
+	fdata, err := os.ReadFile(fp)
+	if err != nil {
+		return SpeedTable{}, fmt.Errorf("way_factor_file: %w", err)
+	}
+	var m map[string]float64
+	if err := json.Unmarshal(fdata, &m); err != nil {
+		return SpeedTable{}, fmt.Errorf("way_factor_file %s: %w", fp, err)
+	}
+	wf, err := parseWayFactors(m)
+	if err != nil {
+		return SpeedTable{}, fmt.Errorf("way_factor_file %s: %w", fp, err)
+	}
+	for id, f := range t.WayFactor {
+		wf[id] = f
+	}
+	t.WayFactor = wf
+	return t, nil
 }
 
 // classSpeed returns the base (non-link) speed for a highway class.
@@ -182,6 +250,16 @@ func (s SpeedTable) SpeedKmh(t osm.Tags) float64 {
 				break
 			}
 		}
+	}
+	return v
+}
+
+// WaySpeedKmh is SpeedKmh for the OSM way with the given id: SpeedKmh(t)
+// scaled by the way's WayFactor, if it has one.
+func (s SpeedTable) WaySpeedKmh(id int64, t osm.Tags) float64 {
+	v := s.SpeedKmh(t)
+	if f, ok := s.WayFactor[id]; ok {
+		v *= f
 	}
 	return v
 }

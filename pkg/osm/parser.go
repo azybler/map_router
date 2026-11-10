@@ -320,7 +320,7 @@ func Parse(ctx context.Context, rs io.ReadSeeker, opts ...ParseOptions) (*ParseR
 			NodeIDs:    nodeIDs,
 			Forward:    fwd,
 			Backward:   bwd,
-			SpeedKmh:   opt.Speeds.SpeedKmh(w.Tags),
+			SpeedKmh:   opt.Speeds.WaySpeedKmh(int64(w.ID), w.Tags),
 			Restricted: restricted,
 			Class:      ClassRank(w.Tags.Find("highway")),
 		})

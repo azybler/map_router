@@ -32,5 +32,6 @@
   },
   "ref_factor": {
     "E11": 0.95
-  }
+  },
+  "way_factor_file": "way_factors.json"
 }

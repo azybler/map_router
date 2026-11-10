@@ -94,10 +94,22 @@ keys (`"E11": 0.95` prices the congested LDP below other motorways). Its
 | `traffic_signal` | entering a node tagged `highway=traffic_signals` |
 | `toll_booth` | entering a node tagged `barrier=toll_booth` |
 
+`way_factor_file` names a JSON object of per-road speed factors
+(`"<OSM way id>": factor`; here `way_factors.json`, resolved next to
+`speeds.json`), applied after `ref_factor`. They are learned from the routes
+Google picks: a road Google uses more than its class speed explains runs
+faster, one it avoids runs slower. Roads not in the file keep their class
+speed, and a road that OSM later re-maps under a new way id loses its factor
+until the next calibration. Inline `way_factor` entries in `speeds.json`
+override the file.
+
 The values are calibrated against Google's routes for real delivery trips
-(`datasets/elevete_route_cache/`, gitignored): last on 2026-10-31, against
-7,991 Google Maps routes for real pickup and drop-off legs plus 1,789 cached
-Routes API results. Most legs share a few corridors, so the score has cliffs:
+(`datasets/elevete_route_cache/`, gitignored). The class speeds and delays were
+last tuned on 2026-10-31, against 7,991 Google Maps routes for real pickup and
+drop-off legs plus 1,789 cached Routes API results. The way factors were fitted
+on 2026-11-10 to 11,065 Google Maps routes, with the Routes API results held
+out: overlap with Google's path there went 0.780 → 0.832, and mean distance
+error 7.2% → 5.7%. Most legs share a few corridors, so the score has cliffs:
 raising any one delay by 0.5 s flips whole corridors away from Google's
 choice. Check a change against held-out routes before trusting it.
 
