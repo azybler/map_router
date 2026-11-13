@@ -30,6 +30,12 @@ func EquirectangularDist(lat1, lon1, lat2, lon2 float64) float64 {
 // degToMeters converts degree-scaled equirectangular distances to meters.
 const degToMeters = math.Pi / 180 * earthRadiusMeters
 
+// MetersPerDegree is the length PointToSegmentDist gives one degree of
+// latitude. It gives one degree of longitude that length times the cosine of
+// the segment's mid-latitude. A caller can use the two to rule a segment out
+// by its bounding box before paying for the exact distance.
+const MetersPerDegree = degToMeters
+
 // PointToSegmentDist computes the perpendicular distance from point P to segment AB,
 // and returns the projection ratio along AB (clamped to [0,1]).
 // dist is in meters, ratio is in [0.0, 1.0].
