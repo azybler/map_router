@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math"
 	"sync"
+	"sync/atomic"
 
 	"github.com/azybler/map_router/pkg/geo"
 	"github.com/azybler/map_router/pkg/graph"
@@ -87,7 +88,11 @@ type Engine struct {
 	chg       *graph.CHGraph
 	origGraph *graph.Graph // for geometry and snap
 	snapper   *Snapper
-	qsPool    sync.Pool
+
+	// Idle QueryStates: one in keptQS, any others in qsPool. See getQueryState.
+	keptQS  atomic.Pointer[QueryState]
+	qsPool  sync.Pool
+	qsBuilt atomic.Int64 // QueryStates built so far
 }
 
 // NewEngine creates a routing engine from a CH graph and the original graph,
@@ -112,9 +117,44 @@ func NewEngineWithSnapper(chg *graph.CHGraph, origGraph *graph.Graph, snapper *S
 		snapper:   snapper,
 	}
 	e.qsPool.New = func() any {
+		e.qsBuilt.Add(1)
 		return NewQueryState(chg.NumNodes)
 	}
 	return e
+}
+
+// getQueryState returns a QueryState ready for one search. Hand it back with
+// putQueryState.
+//
+// A QueryState is four arrays the size of the graph (120 MB on a graph of 7.5
+// million nodes), so building one takes many times longer than the search it
+// is for. sync.Pool alone is the wrong home for something that costly:
+//
+//   - the garbage collector empties a pool, so an idle state lasts two
+//     collections at most;
+//   - a state handed back on one P waits in that P's private slot, where a
+//     query running on another P cannot take it.
+//
+// Either way the next query built a new state, which was the slow tail of
+// queries that otherwise take about a millisecond.
+//
+// So one idle state is kept outside the pool, where neither applies. Queries
+// that overlap draw the others from the pool as before, which lets a burst's
+// extra states go once it is over: only this one stays for good.
+func (e *Engine) getQueryState() *QueryState {
+	if qs := e.keptQS.Swap(nil); qs != nil {
+		return qs
+	}
+	return e.qsPool.Get().(*QueryState)
+}
+
+// putQueryState resets qs and makes it available to the next query.
+func (e *Engine) putQueryState(qs *QueryState) {
+	qs.Reset()
+	if e.keptQS.CompareAndSwap(nil, qs) {
+		return
+	}
+	e.qsPool.Put(qs)
 }
 
 // SnapCandidates returns up to k distinct road candidates within radiusMeters of
@@ -151,11 +191,8 @@ func (e *Engine) Route(ctx context.Context, start, end LatLng) (*RouteResult, er
 	}
 
 	// Step 2: Run bidirectional CH Dijkstra with predecessor tracking.
-	qs := e.qsPool.Get().(*QueryState)
-	defer func() {
-		qs.Reset()
-		e.qsPool.Put(qs)
-	}()
+	qs := e.getQueryState()
+	defer e.putQueryState(qs)
 
 	for _, c := range startCands {
 		seedForward(qs, e.origGraph, c)
@@ -240,11 +277,8 @@ func (e *Engine) RouteBetweenSnaps(ctx context.Context, start, end SnapResult) (
 		// which finds the legal way round.
 	}
 
-	qs := e.qsPool.Get().(*QueryState)
-	defer func() {
-		qs.Reset()
-		e.qsPool.Put(qs)
-	}()
+	qs := e.getQueryState()
+	defer e.putQueryState(qs)
 
 	seedForwardPenalty(qs, g, start, 0)
 	seedBackwardPenalty(qs, g, end, 0)
