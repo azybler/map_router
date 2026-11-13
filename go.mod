@@ -1,6 +1,6 @@
 module github.com/azybler/map_router
 
-go 1.26.0
+go 1.27.4
 
 require github.com/paulmach/osm v0.9.0
 
