@@ -37,6 +37,8 @@ func TestQueryStateOutlivesGarbageCollection(t *testing.T) {
 	if got := eng.qsBuilt.Load(); got != 1 {
 		t.Errorf("a query after garbage collection built a new QueryState: %d built, want 1", got)
 	}
+	// Exactly equal, not within a tolerance: it is the same query on the same
+	// engine in the same process, so every floating-point step is the same.
 	if again.Cost != first.Cost || again.TotalDistanceMeters != first.TotalDistanceMeters {
 		t.Errorf("the reused QueryState gave a different route: cost %d, %.3f m; want %d, %.3f m",
 			again.Cost, again.TotalDistanceMeters, first.Cost, first.TotalDistanceMeters)
@@ -106,6 +108,7 @@ func TestQueryStatesUnderConcurrentQueries(t *testing.T) {
 					errs <- "Route: " + err.Error()
 					return
 				}
+				// Exactly equal, for the same reason as in the test above.
 				if res.Cost != want[i].cost || res.TotalDistanceMeters != want[i].dist {
 					errs <- "a query that overlapped others got a different route than it does alone"
 					return
